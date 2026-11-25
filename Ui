@@ -358,16 +358,31 @@ function VexUI:UpdateTheme(targetObject, isTween)
     end
 end
 
+function VexUI:ResolveThemeName(themeName)
+    if type(themeName) ~= "string" then return nil end
+    if VexUI.Themes[themeName] then return themeName end
+    local low = themeName:lower()
+    for name in pairs(VexUI.Themes) do
+        if name:lower() == low then return name end
+    end
+    for name in pairs(VexUI.Themes) do
+        local n = name:lower()
+        if low:find(n, 1, true) == 1 or n:find(low, 1, true) == 1 then return name end
+    end
+    return nil
+end
+
 function VexUI:SetTheme(themeName)
-    local theme = VexUI.Themes[themeName]
-    if not theme then
+    local resolved = VexUI:ResolveThemeName(themeName)
+    if not resolved then
         warn("Theme '" .. tostring(themeName) .. "' not found.")
         return false
     end
+    local theme = VexUI.Themes[resolved]
     UI.Theme = theme
     VexUI:UpdateTheme(nil, true)
     for _, fn in ipairs(VexUI.Listeners) do Safe(fn, theme) end
-    return true
+    return true, resolved
 end
 
 function UI:SetTheme(name) return VexUI:SetTheme(name) end
@@ -1486,6 +1501,42 @@ Builders.Paragraph = function(ctx, Config)
     return Paragraph
 end
 
+-- TEXT / LABEL ---------------------------------------------------------
+Builders.Text = function(ctx, Config)
+    if type(Config) == "string" then Config = { Text = Config } end
+    Config = Config or {}
+    local T = {
+        Text = Config.Text or Config.Title or "", TextSize = Config.TextSize or 13,
+        Color = ResolveColor(Config.Color),
+    }
+    local align = Left
+    if type(Config.Align) == "string" then
+        align = Enum.TextXAlignment[Config.Align] or Left
+    end
+    local obj = CreateText(ctx.Parent, T.Text, {
+        TextSize = T.TextSize, PaddingLeft = 8, PaddingRight = 8, TextXAlignment = align,
+        TextTransparency = Config.Transparency or 0.15, Static = T.Color ~= nil, TextColor3 = T.Color,
+    })
+    local entry = ctx:Register({ Title = T.Text, Icon = "type", Type = "Text", Frame = obj.Frame })
+    T.Root = obj.Frame
+    function T:SetText(v)
+        T.Text = v
+        entry.Title = v
+        obj.SetText(v)
+    end
+    T.SetTitle = T.SetText
+    function T:GetText() return T.Text end
+    function T:SetVisible(v) obj.SetVisible(v and true or false) end
+    function T:Close()
+        for i, e in ipairs(ctx.Window.SearchIndex) do
+            if e == entry then table.remove(ctx.Window.SearchIndex, i) break end
+        end
+        obj.Frame:Destroy()
+    end
+    return T
+end
+Builders.Label = Builders.Text
+
 -- DIVIDER / SPACE ------------------------------------------------------
 Builders.Devider = function(ctx)
     local f = VexUI:Create("Frame", {
@@ -1548,11 +1599,34 @@ local function Compat(obj)
     return obj
 end
 
+-- Containers (Tab / Section / Group): ANY unknown Capitalized method becomes a no-op
+local ContainerKnown = {
+    Title = true, Icon = true, Border = true, Callback = true, Default = true, TextSize = true,
+    UIPadding = true, Open = true, Root = true, Select = true, Opened = true, Desc = true,
+}
+local ContainerMT = {
+    __index = function(_, key)
+        if type(key) ~= "string" or not key:match("^%u") or ContainerKnown[key] then return nil end
+        if not CompatWarned[key] then
+            CompatWarned[key] = true
+            warn("[VexUI] element/method '" .. key .. "' does not exist (ignored).")
+        end
+        return function() return NoOp end
+    end,
+}
+local function ContainerCompat(obj)
+    if type(obj) == "table" and getmetatable(obj) == nil then setmetatable(obj, ContainerMT) end
+    return obj
+end
+
 local function AttachElementMethods(obj, ctx)
     for name, builder in pairs(Builders) do
         obj[name] = function(_, cfg)
             local ok, res = pcall(builder, ctx, cfg or {})
-            if ok then return Compat(res) end
+            if ok then
+                if name == "Section" or name == "Group" then return ContainerCompat(res) end
+                return Compat(res)
+            end
             warn("[VexUI] failed to build '" .. name .. "': " .. tostring(res))
             return NoOp
         end
@@ -1771,9 +1845,14 @@ function UI:CreateWindow(Config)
     end
 
     function Window:SetTheme(themeName)
-        if VexUI:SetTheme(themeName) then Window.Theme = themeName end
+        local ok, name = VexUI:SetTheme(themeName)
+        if ok then Window.Theme = name end
     end
-    VexUI:SetTheme(Window.Theme)
+    do
+        local ok, name = VexUI:SetTheme(Window.Theme)
+        Window.Theme = ok and name or "Dark"
+        if not ok then VexUI:SetTheme("Dark") end
+    end
 
     local TH = Window.Topbar.Height
     local F3W = 190
@@ -2508,7 +2587,7 @@ function UI:CreateWindow(Config)
                 if not Window.CurrentTabObj then SelectTab() end
             end)
         end
-        return Compat(Tab)
+        return ContainerCompat(Tab)
     end
 
     function Window:Section(Cfg)
@@ -2572,7 +2651,7 @@ function UI:CreateWindow(Config)
 
         function Section:Tab(c) return Window:Tab(c, Roll) end
         function Section:Toggle(v) if v == nil then v = not isOpen end setOpen(v and true or false) end
-        return Compat(Section)
+        return ContainerCompat(Section)
     end
 
     -- Dialog ---------------------------------------------------------
