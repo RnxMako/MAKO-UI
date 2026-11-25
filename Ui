@@ -177,37 +177,48 @@ local function CreateSection(ctx, Section)
 end
 
 
+Builders = Builders or {}
+
 -- GROUP ---------------------------------------------------------------
 Builders.Group = function(ctx, Config)
-    Config = Config or {}
-    local Padding = Config.Padding or 5
-    local GroupFrame = VexUI:Create("Frame", {
-        Parent = ctx.Parent, BackgroundTransparency = 1, AutomaticSize = AutoY, Size = UDim2.new(1, 0, 0, 0),
-    }, {
-        VexUI:Create("UIListLayout", {
-            FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Left,
-            VerticalAlignment = Enum.VerticalAlignment.Top, SortOrder = Enum.SortOrder.LayoutOrder,
-            Padding = UDim.new(0, Padding),
-        }),
-    })
+	Config = Config or {}
+	local Padding = Config.Padding or 5
+	local GroupFrame = VexUI:Create("Frame", {
+		Parent = ctx.Parent,
+		BackgroundTransparency = 1,
+		AutomaticSize = AutoY,
+		Size = UDim2.new(1, 0, 0, 0),
+	}, {
+		VexUI:Create("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			HorizontalAlignment = Enum.HorizontalAlignment.Left,
+			VerticalAlignment = Enum.VerticalAlignment.Top,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Padding = UDim.new(0, Padding),
+		}),
+	})
 
-    local function Resize()
-        local kids = {}
-        for _, c in ipairs(GroupFrame:GetChildren()) do
-            if c:IsA("Frame") then table.insert(kids, c) end
-        end
-        local n = math.max(1, #kids)
-        local off = -(Padding * (n - 1) / n)
-        for _, c in ipairs(kids) do
-            c.Size = UDim2.new(1 / n, off, 0, c.Size.Y.Offset)
-        end
-    end
+	local function Resize()
+		local kids = {}
+		for _, c in ipairs(GroupFrame:GetChildren()) do
+			if c:IsA("Frame") then
+				table.insert(kids, c)
+			end
+		end
+		local n = math.max(1, #kids)
+		local off = -(Padding * (n - 1) / n)
+		for _, c in ipairs(kids) do
+			c.Size = UDim2.new(1 / n, off, 0, c.Size.Y.Offset)
+		end
+	end
 
-    local Group = { Root = GroupFrame }
-    local gctx = setmetatable({ Parent = GroupFrame, OnAdd = Resize }, { __index = ctx })
-    AttachElementMethods(Group, gctx)
-    function Group:Close() GroupFrame:Destroy() end
-    return Group
+	local Group = { Root = GroupFrame }
+	local gctx = setmetatable({ Parent = GroupFrame, OnAdd = Resize }, { __index = ctx })
+	AttachElementMethods(Group, gctx)
+	function Group:Close()
+		GroupFrame:Destroy()
+	end
+	return Group
 end
 
 ----------------------------------------------------------------------
@@ -1044,44 +1055,333 @@ function UI:CreateWindow(Config)
         if Section.Icon then
             local I = VexUI:Create("ImageLabel", {
                 Parent = Head, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0.5, 0),
-                Size = UDim2.new(0, 16, 0, 16), ZIndex = 6, ThemeID = { ImageColor3 = "IconColor" },
-            })
-            SetIcon(I, Section.Icon)
-        end
+-- Tabs ------------------------------------------------------------
+function Window:SelectTab(i)
+	local t
+	if type(i) == "number" then
+		t = Window.TabList[i]
+	else
+		for _, tab in ipairs(Window.TabList) do
+			if tab.Title == i then
+				t = tab
+				break
+			end
+		end
+	end
+	if t and t.Select then
+		t.Select()
+	end
+end
 
-        local Roll = VexUI:Create("Frame", {
-            Parent = SectionFrame, LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AutoY,
-            ClipsDescendants = true, BackgroundTransparency = 1,
-        }, { Utility:ListLayout("V", 4) })
-        local RollLayout = Roll:FindFirstChildOfClass("UIListLayout")
+local function NewCtx(Tab, Parent, Scroll)
+	local ctx = { Window = Window, Tab = Tab, Parent = Parent, Scroll = Scroll }
+	function ctx:Register(entry)
+		entry.TabTitle = Tab.Title
+		entry.SelectFn = Tab.Select
+		entry.Scroll = self.Scroll or Scroll
+		table.insert(Window.SearchIndex, entry)
+		if self.OnAdd then
+			self.OnAdd(entry.Frame)
+		end
+		return entry
+	end
+	return ctx
+end
 
-        local token = 0
-        local function setOpen(open, instant)
-            isOpen = open
-            token += 1
-            local my = token
-            Utility:TweenObject(Arrow, { Rotation = open and 180 or 0 }, 0.16)
-            if open then
-                if instant then Roll.AutomaticSize = AutoY Roll.Size = UDim2.new(1, 0, 0, 0) return end
-                Roll.AutomaticSize = AutoNone
-                Utility:TweenObject(Roll, { Size = UDim2.new(1, 0, 0, Unscale(RollLayout.AbsoluteContentSize.Y)) }, 0.2)
-                task.delay(0.24, function()
-                    if token == my and isOpen then Roll.AutomaticSize = AutoY Roll.Size = UDim2.new(1, 0, 0, 0) end
-                end)
-            else
-                Roll.Size = UDim2.new(1, 0, 0, Unscale(Roll.AbsoluteSize.Y))
-                Roll.AutomaticSize = AutoNone
-                if instant then Roll.Size = UDim2.new(1, 0, 0, 0)
-                else Utility:TweenObject(Roll, { Size = UDim2.new(1, 0, 0, 0) }, 0.2) end
-            end
-        end
-        Head.Activated:Connect(function() setOpen(not isOpen) end)
-        if not isOpen then setOpen(false, true) end
+function Window:Tab(Cfg, parentOverride)
+	Cfg = Cfg or {}
+	local Tab = {
+		Title = Cfg.Title or "Tab",
+		Icon = Cfg.Icon,
+		Border = Cfg.Border or false,
+		Callback = Cfg.Callback or function() end,
+	}
 
-        function Section:Tab(c) return Window:Tab(c, Roll) end
-        function Section:Toggle(v) if v == nil then v = not isOpen end setOpen(v and true or false) end
-        return Section
-    end
+	local TabBack = VexUI:Create("Frame", {
+		Parent = parentOverride or LeftScroll,
+		Size = UDim2.new(1, 0, 0, 32),
+		AutomaticSize = AutoY,
+		BackgroundTransparency = 1,
+		LayoutOrder = #Window.TabList + 1,
+		ThemeID = { BackgroundColor3 = "Tab.Background|ElementColor" },
+	}, { Corner(11), GStroke({ Thickness = 0.6 }) })
+
+	local TabStroke = TabBack:FindFirstChildOfClass("UIStroke")
+	if TabStroke then
+		TabStroke.Transparency = 1
+	end
+
+	local TabTitle = VexUI:Create("TextLabel", {
+		Parent = TabBack,
+		Size = UDim2.new(1, 0, 0, 32),
+		AutomaticSize = AutoY,
+		RichText = true,
+		Text = Tab.Title,
+		TextSize = 13,
+		TextWrapped = true,
+		TextXAlignment = Left,
+		TextTransparency = 0.45,
+		ZIndex = 3,
+		ThemeID = { TextColor3 = "Tab.Text|Text" },
+	}, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, Tab.Icon and 38 or 14), PaddingRight = UDim.new(0, 6) }) })
+
+	local TabIcon
+	if Tab.Icon then
+		TabIcon = VexUI:Create("ImageLabel", {
+			Parent = TabBack,
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.new(0, 13, 0.5, 0),
+			Size = UDim2.new(0, 19, 0, 19),
+			ImageTransparency = 0.45,
+			ZIndex = 3,
+			ThemeID = { ImageColor3 = "Tab.IconColor|IconColor" },
+		})
+		SetIcon(TabIcon, Tab.Icon)
+	end
+
+	local AccentBar = VexUI:Create("Frame", {
+		Parent = TabBack,
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 3, 0.5, 0),
+		Size = UDim2.new(0, 3, 0, 14),
+		BackgroundTransparency = 1,
+		ZIndex = 4,
+		ThemeID = { BackgroundColor3 = "Accent" },
+	}, { Corner(2) })
+
+	local TabTRG = VexUI:Create("TextButton", {
+		Parent = TabBack,
+		Size = UDim2.new(1, 0, 1, 0),
+		ZIndex = 6,
+	})
+
+	local Page = VexUI:Create("Frame", {
+		Parent = PagesHolder,
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 0.35,
+		Visible = false,
+		ThemeID = { BackgroundColor3 = "SideBar" },
+	}, { Corner(16), GStroke({ Alt = true, Thickness = 0.6 }) })
+
+	local RightScroll = VexUI:Create("ScrollingFrame", {
+		Parent = Page,
+		Position = UDim2.new(0, 0, 0, 5),
+		Size = UDim2.new(1, 0, 1, -10),
+		AutomaticCanvasSize = AutoY,
+		ScrollBarThickness = 3,
+		ScrollBarImageTransparency = 0.4,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		ElasticBehavior = Enum.ElasticBehavior.WhenScrollable,
+		ClipsDescendants = true,
+		ThemeID = { ScrollBarImageColor3 = "IconColor" },
+	}, { Utility:ListLayout("V", 5), Utility:Padding({ top = 5, bottom = 8, left = 6, right = 10 }) })
+
+	local active = false
+	Tab._SetActive = function(state)
+		active = state
+		Utility:TweenObject(TabBack, { BackgroundTransparency = state and 0.65 or 1 }, 0.2)
+		if TabStroke then
+			Utility:TweenObject(TabStroke, { Transparency = (state and Tab.Border) and 0 or 1 }, 0.2)
+		end
+		Utility:TweenObject(TabTitle, { TextTransparency = state and 0 or 0.45 }, 0.2)
+		Utility:TweenObject(AccentBar, { BackgroundTransparency = state and 0 or 1 }, 0.2)
+		if TabIcon then
+			Utility:TweenObject(TabIcon, { ImageTransparency = state and 0 or 0.45 }, 0.2)
+		end
+		if state then
+			Page.Visible = true
+			Page.BackgroundTransparency = 0.8
+			RightScroll.Position = UDim2.new(0, 0, 0, 16)
+			Utility:TweenObject(Page, { BackgroundTransparency = 0.35 }, 0.25)
+			Utility:TweenObject(RightScroll, { Position = UDim2.new(0, 0, 0, 5) }, 0.25, QuadOut, DirOut)
+		else
+			Page.Visible = false
+		end
+	end
+
+	TabTRG.MouseEnter:Connect(function()
+		if not active then
+			Utility:TweenObject(TabBack, { BackgroundTransparency = 0.88 }, 0.12)
+		end
+	end)
+
+	TabTRG.MouseLeave:Connect(function()
+		if not active then
+			Utility:TweenObject(TabBack, { BackgroundTransparency = 1 }, 0.12)
+		end
+	end)
+
+	local function SelectTab()
+		if Window.CurrentTabObj == Tab and active then
+			return
+		end
+		for _, t in ipairs(Window.TabList) do
+			if t ~= Tab then
+				t._SetActive(false)
+			end
+		end
+		Window.CurrentTabObj = Tab
+		Window.CurrentTab = Tab
+		Window.ActiveElementFrame = Page
+		Tab._SetActive(true)
+		Safe(Tab.Callback)
+	end
+
+	Tab.Select = function()
+		SelectTab()
+	end
+
+	TabTRG.Activated:Connect(SelectTab)
+	table.insert(Window.Tabs, TabBack)
+	table.insert(Window.TabOrder, Tab.Title)
+	table.insert(Window.TabList, Tab)
+	table.insert(Window.SearchIndex, {
+		Title = Tab.Title,
+		Icon = Tab.Icon or "layout-grid",
+		Type = "Tab",
+		TabTitle = "Tab",
+		SelectFn = SelectTab,
+		Frame = TabBack,
+		Scroll = RightScroll,
+	})
+
+	local ctx = NewCtx(Tab, RightScroll, RightScroll)
+	AttachElementMethods(Tab, ctx)
+
+	function Tab:Group(cfg)
+		if Builders and type(Builders.Group) == "function" then
+			return Builders.Group(ctx, cfg)
+		end
+		warn("Builders.Group is not defined yet.")
+		return Tab
+	end
+
+	if #Window.TabList == 1 then
+		task.defer(function()
+			if not Window.CurrentTabObj then
+				SelectTab()
+			end
+		end)
+	end
+
+	return Tab
+end
+
+function Window:Section(Cfg)
+	Cfg = Cfg or {}
+	local Section = {
+		Title = Cfg.Title or "Section",
+		Icon = Cfg.Icon,
+		Opened = (Cfg.Opened == nil) and true or Cfg.Opened,
+	}
+	local isOpen = Section.Opened
+
+	local SectionFrame = VexUI:Create("Frame", {
+		Parent = LeftScroll,
+		AutomaticSize = AutoY,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 0),
+		LayoutOrder = #Window.TabList + 1,
+	}, { Utility:ListLayout("V", 3) })
+
+	local Head = VexUI:Create("TextButton", { Parent = SectionFrame, Size = UDim2.new(1, 0, 0, 28), ZIndex = 5 })
+	local Arrow = VexUI:Create("ImageLabel", {
+		Parent = Head,
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -8, 0.5, 0),
+		Size = UDim2.new(0, 14, 0, 14),
+		Rotation = isOpen and 180 or 0,
+		ThemeID = { ImageColor3 = "Text" },
+	})
+	SetIcon(Arrow, "chevron-down")
+
+	VexUI:Create("TextLabel", {
+		Parent = Head,
+		Size = UDim2.new(1, 0, 1, 0),
+		Text = Section.Title,
+		RichText = true,
+		TextSize = 14,
+		TextXAlignment = Left,
+		ZIndex = 6,
+		ThemeID = { TextColor3 = "Text" },
+	}, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, Section.Icon and 28 or 10) }) })
+
+	if Section.Icon then
+		local I = VexUI:Create("ImageLabel", {
+			Parent = Head,
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.new(0, 8, 0.5, 0),
+			Size = UDim2.new(0, 16, 0, 16),
+			ZIndex = 6,
+			ThemeID = { ImageColor3 = "IconColor" },
+		})
+		SetIcon(I, Section.Icon)
+	end
+
+	local Roll = VexUI:Create("Frame", {
+		Parent = SectionFrame,
+		LayoutOrder = 2,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = AutoY,
+		ClipsDescendants = true,
+		BackgroundTransparency = 1,
+	}, { Utility:ListLayout("V", 4) })
+
+	local RollLayout = Roll:FindFirstChildOfClass("UIListLayout")
+	local token = 0
+
+	local function setOpen(open, instant)
+		isOpen = open
+		token += 1
+		local my = token
+		Utility:TweenObject(Arrow, { Rotation = open and 180 or 0 }, 0.16)
+		if open then
+			if instant then
+				Roll.AutomaticSize = AutoY
+				Roll.Size = UDim2.new(1, 0, 0, 0)
+				return
+			end
+			Roll.AutomaticSize = AutoNone
+			Utility:TweenObject(Roll, { Size = UDim2.new(1, 0, 0, Unscale(RollLayout.AbsoluteContentSize.Y)) }, 0.2)
+			task.delay(0.24, function()
+				if token == my and isOpen then
+					Roll.AutomaticSize = AutoY
+					Roll.Size = UDim2.new(1, 0, 0, 0)
+				end
+			end)
+		else
+			Roll.Size = UDim2.new(1, 0, 0, Unscale(Roll.AbsoluteSize.Y))
+			Roll.AutomaticSize = AutoNone
+			if instant then
+				Roll.Size = UDim2.new(1, 0, 0, 0)
+			else
+				Utility:TweenObject(Roll, { Size = UDim2.new(1, 0, 0, 0) }, 0.2)
+			end
+		end
+	end
+
+	Head.Activated:Connect(function()
+		setOpen(not isOpen)
+	end)
+
+	if not isOpen then
+		setOpen(false, true)
+	end
+
+	function Section:Tab(c)
+		return Window:Tab(c, Roll)
+	end
+
+	function Section:Toggle(v)
+		if v == nil then
+			v = not isOpen
+		end
+		setOpen(v and true or false)
+	end
+
+	return Section
+end
+
 
     -- Dialog ---------------------------------------------------------
     function Window:Dialog(Cfg)
