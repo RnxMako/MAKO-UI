@@ -1,0 +1,4075 @@
+--[[
+    VexUI v2.0  (FULL REWRITE - same public API, fixed + improved)
+
+    Highlights
+      - Theme system: smooth tween, Accent color, 8 built-in themes, AddTheme/SetTheme/GetThemes
+      - Scrolling: AutomaticCanvasSize everywhere, no manual CanvasSize conflicts, touch-friendly
+      - Mobile: topbar-only dragging, bigger touch targets, auto scale on viewport change,
+                slider locks page scroll while dragging
+      - Search: jumps to the element and highlights it
+      - Notifications: stacking, progress bar, click to dismiss, optional Type
+      - No more global leaks, connections cleaned on Destroy, OnDestroy callback works
+]]
+
+--// Services
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+
+local LocalPlayer = Players.L
+    local Root = VexUI:Create("Frame", {
+        Parent = ctx.Parent, BackgroundTransparency = 1, AutomaticSize = AutoY, Size = UDim2.new(1, 0, 0, 28),
+    }, { Utility:ListLayout("V", 4) })
+
+    local Header = VexUI:Create("TextButton", { Parent = Root, Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 1 })
+    local Label = VexUI:Create("TextLabel", {
+        Parent = Header, Size = UDim2.new(1, 0, 1, 0), Text = Section.Title, RichText = true, TextSize = Section.TextSize,
+        TextXAlignment = Left, ThemeID = { TextColor3 = "Section.Text|Text" },
+    }, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, 4) }) })
+
+    if Section.Icon then
+        Label.UIPadding.PaddingLeft = Section.UIPadding + UDim.new(0, 28)
+        local Icon = VexUI:Create("ImageLabel", {
+            Parent = Header, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 4, 0.5, 0),
+            Size = UDim2.new(0, 20, 0, 20), ThemeID = { ImageColor3 = "Section.Icon|IconColor" },
+        })
+        SetIcon(Icon, Section.Icon)
+    end
+
+    local Arrow = VexUI:Create("ImageLabel", {
+        Parent = Header, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0),
+        Size = UDim2.new(0, 16, 0, 16), Visible = false, Rotation = 180,
+        ThemeID = { ImageColor3 = "Section.Icon|IconColor" },
+    })
+    SetIcon(Arrow, "chevron-down")
+
+    local Container = VexUI:Create("Frame", {
+        Parent = Root, LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AutoY, ClipsDescendants = true,
+        BackgroundTransparency = Section.Border and 0.7 or 1, ThemeID = { BackgroundColor3 = "ElementColor" },
+    }, {
+        Corner(14), Utility:ListLayout("V", 5), Utility:Padding({ top = 4, bottom = 4, left = 3, right = 3 }),
+        GStroke({ Alt = true }),
+    })
+    local CStroke = Container:FindFirstChildOfClass("UIStroke")
+    CStroke.Transparency = Section.Border and 0 or 1
+    local Layout = Container:FindFirstChildOfClass("UIListLayout")
+
+    local token, elements = 0, 0
+    local function setOpen(open, instant)
+        Section.Open = open
+        token += 1
+        local my = token
+        Utility:TweenObject(Arrow, { Rotation = open and 180 or 0 }, 0.25)
+        if open then
+            if instant then
+                Container.AutomaticSize = AutoY
+                Container.Size = UDim2.new(1, 0, 0, 0)
+                return
+            end
+            local target = Unscale(Layout.AbsoluteContentSize.Y) + 8
+            Container.AutomaticSize = AutoNone
+            Utility:TweenObject(Container, { Size = UDim2.new(1, 0, 0, target) }, 0.25)
+            task.delay(0.28, function()
+                if token == my and Section.Open then
+                    Container.AutomaticSize = AutoY
+                    Container.Size = UDim2.new(1, 0, 0, 0)
+                end
+            end)
+        else
+            local cur = Unscale(Container.AbsoluteSize.Y)
+            Container.Size = UDim2.new(1, 0, 0, cur)
+            Container.AutomaticSize = AutoNone
+            if instant then
+                Container.Size = UDim2.new(1, 0, 0, 0)
+            else
+                Utility:TweenObject(Container, { Size = UDim2.new(1, 0, 0, 0) }, 0.25)
+            end
+        end
+    end
+
+    Header.Activated:Connect(function()
+        if elements == 0 then return end
+        setOpen(not Section.Open)
+    end)
+
+    local sctx = setmetatable({
+        Parent = Container,
+        OnAdd = function()
+            elements += 1
+            if elements == 1 then
+                Arrow.Visible = true
+                if not Section.Default then setOpen(false, true) end
+            end
+        end,
+    }, { __index = ctx })
+    AttachElementMethods(Section, sctx)
+
+    local ElementToggle = Section.Toggle
+    Section.Toggle = function(self, a)
+        if type(a) == "table" then return ElementToggle(self, a) end
+        if a == nil then a = not Section.Open end
+        if elements == 0 then return end
+        setOpen(a and true or false)
+    end
+    function Section:Close() Root:Destroy() end
+    function Section:SetTitle(v) Label.Text = v end
+    function Section:SetTextSize(v) Label.TextSize = v end
+
+    if not Section.Default then setOpen(false, true) end
+    return Section
+end
+
+-- GROUP ---------------------------------------------------------------
+Builders.Group = function(ctx, Config)
+    Config = Config or {}
+    local Padding = Config.Padding or 5
+    local GroupFrame = VexUI:Create("Frame", {
+        Parent = ctx.Parent, BackgroundTransparency = 1, AutomaticSize = AutoY, Size = UDim2.new(1, 0, 0, 0),
+    }, {
+        VexUI:Create("UIListLayout", {
+            FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Left,
+            VerticalAlignment = Enum.VerticalAlignment.Top, SortOrder = Enum.SortOrder.LayoutOrder,
+            Padding = UDim.new(0, Padding),
+        }),
+    })
+
+    local function Resize()
+        local kids = {}
+        for _, c in ipairs(GroupFrame:GetChildren()) do
+            if c:IsA("Frame") then table.insert(kids, c) end
+        end
+        local n = math.max(1, #kids)
+        local off = -(Padding * (n - 1) / n)
+        for _, c in ipairs(kids) do
+            c.Size = UDim2.new(1 / n, off, 0, c.Size.Y.Offset)
+        end
+    end
+
+    local Group = { Root = GroupFrame }
+    local gctx = setmetatable({ Parent = GroupFrame, OnAdd = Resize }, { __index = ctx })
+    AttachElementMethods(Group, gctx)
+    function Group:Close() GroupFrame:Destroy() end
+    return Group
+end
+
+----------------------------------------------------------------------
+-- Draggable helper (topbar only)
+----------------------------------------------------------------------
+local function EnableDragging(handle, target)
+    local dragging, dragInput, dragStart, startPos = false, nil, nil, nil
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = target.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    handle.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    return UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local d = input.Position - dragStart
+            target.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+end
+
+----------------------------------------------------------------------
+-- WINDOW
+----------------------------------------------------------------------
+function UI:CreateWindow(Config)
+    Config = Config or {}
+    local reqSize = Config.Size
+    local MIN_W, MAX_W, MIN_H, MAX_H = 360, 900, 260, 700
+    local wx = reqSize and reqSize.X.Offset or 480
+    local wy = reqSize and reqSize.Y.Offset or 360
+
+    local Window = {
+        Name = Config.Name or "VexUI", Author = Config.Author, Icon = Config.Icon,
+        ToggleKey = Config.ToggleKey or Enum.KeyCode.F,
+        Transparent = Config.Transparent or false,
+        Theme = Config.Theme or "Dark", Folder = Config.Folder, KeySystem = Config.KeySystem,
+        Default = "Default",
+        AutoScale = (Config.AutoScale == nil) and true or Config.AutoScale,
+        Resizable = (Config.Resizable == nil) and true or Config.Resizable,
+        Topbar = { Height = Config.Height or 36 },
+        Themes = VexUI.Themes,
+        Size = UDim2.new(0, math.clamp(wx, MIN_W, MAX_W), 0, math.clamp(wy, MIN_H, MAX_H)),
+        SideBarWidth = Config.SideBarWidth or (IsMobile and 150 or 160),
+        TransparencyNum = Config.TransparencyNum or (Config.Transparent and 0.25 or 0),
+        User = Config.User or {},
+        Tabs = {}, TabList = {}, TabOrder = {}, SearchIndex = {}, AllElements = {}, CurrentTab = {},
+        IslandOpen = true, _Connections = {}, _OnDestroy = Config.OnDestroy or function() end,
+        _ManualScale = false,
+    }
+    if type(Window.ToggleKey) == "string" then
+        Window.ToggleKey = Enum.KeyCode[Window.ToggleKey] or Enum.KeyCode.F
+    end
+    table.insert(UI.Windows, Window)
+    UI.Window = Window
+
+    function Window:_Connect(signal, fn)
+        local c = signal:Connect(fn)
+        table.insert(Window._Connections, c)
+        return c
+    end
+
+    function Window:SetTheme(themeName)
+        if VexUI:SetTheme(themeName) then Window.Theme = themeName end
+    end
+    VexUI:SetTheme(Window.Theme)
+
+    local TH = Window.Topbar.Height
+    local F3W = 190
+
+    -- Key system -------------------------------------------------------
+    if Window.KeySystem and Window.KeySystem.KeyValidator then
+        local KS = Window.KeySystem
+        local folder = "VexUI/" .. (Window.Folder or "Temp")
+        local keyPath = folder .. "/key.json"
+        local saved
+        pcall(function()
+            if not isfolder("VexUI") then makefolder("VexUI") end
+            if not isfolder(folder) then makefolder(folder) end
+            if isfile(keyPath) then saved = HttpService:JSONDecode(readfile(keyPath)).key end
+        end)
+
+        local autoOk = false
+        if saved and saved ~= "" then
+            local ok, res = pcall(KS.KeyValidator, saved)
+            autoOk = ok and res == true
+        end
+
+        if not autoOk then
+            local done = Instance.new("BindableEvent")
+            local KeyPanel = VexUI:Create("Frame", {
+                Parent = UIScreen, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+                Size = UDim2.new(0, 270, 0, 156), Active = true, ThemeID = { BackgroundColor3 = "Background" },
+            }, {
+                Corner(18), GStroke({ Thickness = 1 }),
+                VexUI:Create("UIScale", { Scale = IsMobile and 0.9 or 1 }),
+            })
+            CreateText(KeyPanel, KS.Title or "Key System", {
+                Position = UDim2.new(0, 0, 0, 12), Size = UDim2.new(1, -50, 0, 0), TextSize = 14, PaddingLeft = 16, ZIndex = 2,
+            })
+            CreateText(KeyPanel, KS.Desc or "Enter your key to continue", {
+                Position = UDim2.new(0, 0, 0, 36), Size = UDim2.new(1, 0, 0, 0), TextSize = 11, PaddingLeft = 16,
+                PaddingRight = 16, TextTransparency = 0.45, ZIndex = 2,
+            })
+            local Cross = VexUI:Create("ImageButton", {
+                Parent = KeyPanel, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 10),
+                Size = UDim2.new(0, 22, 0, 22), ThemeID = { ImageColor3 = "IconColor" }, ZIndex = 3,
+            })
+            SetIcon(Cross, "x")
+            Cross.Activated:Connect(function() UIScreen:Destroy() end)
+
+            local BoxFrame = VexUI:Create("Frame", {
+                Parent = KeyPanel, Position = UDim2.new(0, 16, 0, 78), Size = UDim2.new(1, -32, 0, 32),
+                BackgroundTransparency = 0.2, ThemeID = { BackgroundColor3 = "SideBar" },
+            }, { Corner(12), GStroke({ Alt = true }) })
+            local KeyBox = VexUI:Create("TextBox", {
+                Parent = BoxFrame, Size = UDim2.new(1, 0, 1, 0), Text = saved or "", PlaceholderText = "Key . . .",
+                ClearTextOnFocus = false, TextSize = 12, TextXAlignment = Left, ZIndex = 3,
+                ThemeID = { TextColor3 = "Text" },
+            }, { Utility:Padding({ left = 12, right = 8 }) })
+
+            local function mkBtn(text, x, w, key)
+                local b = VexUI:Create("TextButton", {
+                    Parent = KeyPanel, Position = UDim2.new(x, x == 0 and 16 or 4, 0, 118), Size = UDim2.new(w, -20, 0, 28),
+                    Text = text, TextSize = 12, BackgroundTransparency = 0.1, ZIndex = 3,
+                    ThemeID = { BackgroundColor3 = key, TextColor3 = "Text" },
+                }, { Corner(12) })
+                return b
+            end
+            local Apply = mkBtn("Apply", 0, 0.55, "Accent")
+            local Get = mkBtn("Get Key", 0.55, 0.45, "ElementColor")
+
+            Apply.Activated:Connect(function()
+                local inputKey = KeyBox.Text:gsub("%s+", "")
+                if inputKey == "" then return end
+                Apply.Text = "..."
+                local ok, res = pcall(KS.KeyValidator, inputKey)
+                if ok and res == true then
+                    pcall(function() writefile(keyPath, HttpService:JSONEncode({ key = inputKey })) end)
+                    Apply.Text = "Success"
+                    task.wait(0.4)
+                    KeyPanel:Destroy()
+                    done:Fire()
+                else
+                    Apply.Text = "Invalid"
+                    task.wait(1)
+                    Apply.Text = "Apply"
+                end
+            end)
+            Get.Activated:Connect(function()
+                pcall(function() setclipboard(KS.URL or "") end)
+                Get.Text = "Copied!"
+                task.wait(1)
+                Get.Text = "Get Key"
+            end)
+            done.Event:Wait()
+            done:Destroy()
+        end
+    end
+
+    -- Main -------------------------------------------------------------
+    local Main = VexUI:Create("Frame", {
+        Name = Window.Name, Parent = UIScreen, Size = Window.Size, AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.5, 0), ClipsDescendants = true, Active = true,
+        BackgroundTransparency = Window.TransparencyNum, ThemeID = { BackgroundColor3 = "Background" },
+    }, {
+        Corner(18), GStroke({ Thickness = 1, Alt = true }), VexUI:Create("UIScale", { Scale = 1 }),
+    })
+    local MainScale = Main:FindFirstChildOfClass("UIScale")
+
+    local Surfaces = { { Main, 0 } }
+    local function ApplySurfaces()
+        local t = Window.TransparencyNum
+        for _, s in ipairs(Surfaces) do
+            s[1].BackgroundTransparency = math.clamp(s[2] + t * (1 - s[2]), 0, 1)
+        end
+    end
+
+    local function Panel(parent, name, base, radius)
+        local f = VexUI:Create("Frame", {
+            Name = name, Parent = parent, BackgroundTransparency = base, ThemeID = { BackgroundColor3 = "SideBar" },
+        }, { Corner(radius or 16), GStroke({ Alt = true }) })
+        table.insert(Surfaces, { f, base })
+        return f
+    end
+
+    local TopBar = VexUI:Create("Frame", {
+        Parent = Main, Position = UDim2.new(0, 8, 0, 8), Size = UDim2.new(1, -16, 0, TH),
+        BackgroundTransparency = 1, ZIndex = 10,
+    })
+
+    -- F1 title
+    local TopBarF1 = Panel(TopBar, "Title", 0.1, 16)
+    TopBarF1.Position = UDim2.new(0, 0, 0, 0)
+
+    local LibName = VexUI:Create("TextLabel", {
+        Parent = TopBarF1, Size = UDim2.new(1, 0, 1, 0), RichText = true, Text = Window.Name, TextSize = 13,
+        TextXAlignment = Left,
+        TextYAlignment = Window.Author and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center,
+        TextTruncate = Enum.TextTruncate.AtEnd, ThemeID = { TextColor3 = "Text" },
+    }, {
+        VexUI:Create("UIPadding", {
+            PaddingLeft = UDim.new(0, Window.Icon and 44 or 14),
+            PaddingTop = UDim.new(0, Window.Author and 5 or 0),
+            PaddingRight = UDim.new(0, 6),
+        }),
+    })
+    local LibAuthor = VexUI:Create("TextLabel", {
+        Parent = TopBarF1, Size = UDim2.new(1, 0, 1, 0), RichText = true, Text = Window.Author or "", TextSize = 11,
+        TextTransparency = 0.5, TextXAlignment = Left, Visible = Window.Author ~= nil,
+        TextTruncate = Enum.TextTruncate.AtEnd, ThemeID = { TextColor3 = "Text" },
+    }, {
+        VexUI:Create("UIPadding", {
+            PaddingLeft = UDim.new(0, Window.Icon and 44 or 14), PaddingTop = UDim.new(0, 18), PaddingRight = UDim.new(0, 6),
+        }),
+    })
+    if Window.Icon then
+        local TitleIcon = VexUI:Create("ImageLabel", {
+            Parent = TopBarF1, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0.5, 0),
+            Size = UDim2.new(0, 24, 0, 24), ThemeID = { ImageColor3 = "IconColor" },
+        })
+        SetIcon(TitleIcon, Window.Icon)
+    end
+
+    -- F2 topbar buttons
+    local TopBarF2 = Panel(TopBar, "Buttons", 0.1, 16)
+    TopBarF2.AnchorPoint = Vector2.new(1, 0)
+    TopBarF2.Size = UDim2.new(0, 0, 1, 0)
+    TopBarF2.Visible = false
+    TopBarF2.ClipsDescendants = false
+    VexUI:Create("UIListLayout", {
+        Parent = TopBarF2, FillDirection = Enum.FillDirection.Horizontal, SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 4), VerticalAlignment = Enum.VerticalAlignment.Center,
+        HorizontalAlignment = Enum.HorizontalAlignment.Center,
+    })
+
+    -- F3 search + controls
+    local TopBarF3 = Panel(TopBar, "Tools", 0.1, 16)
+    TopBarF3.AnchorPoint = Vector2.new(1, 0)
+    TopBarF3.Position = UDim2.new(1, 0, 0, 0)
+    TopBarF3.Size = UDim2.new(0, F3W, 1, 0)
+
+    local SearchPill = VexUI:Create("Frame", {
+        Parent = TopBarF3, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 6, 0.5, 0),
+        Size = UDim2.new(0, 120, 0, 26), ThemeID = { BackgroundColor3 = "Search.Background|Background" },
+    }, { Corner(13), GStroke({ Alt = true }) })
+    local PillStroke = SearchPill:FindFirstChildOfClass("UIStroke")
+    local SearchIcon = VexUI:Create("ImageLabel", {
+        Parent = SearchPill, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0.5, 0),
+        Size = UDim2.new(0, 14, 0, 14), ThemeID = { ImageColor3 = "IconColor" },
+    })
+    SetIcon(SearchIcon, "search")
+    local SearchBox = VexUI:Create("TextBox", {
+        Parent = SearchPill, Position = UDim2.new(0, 26, 0, 0), Size = UDim2.new(1, -30, 1, 0), TextSize = 11,
+        ClearTextOnFocus = true, PlaceholderText = "Search . . .", Text = "", TextXAlignment = Left,
+        ClipsDescendants = true, ZIndex = 3, ThemeID = { TextColor3 = "Search.Text|Text" },
+    })
+
+    local Controls = VexUI:Create("Frame", {
+        Parent = TopBarF3, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
+        Size = UDim2.new(0, 54, 0, 26), BackgroundTransparency = 1,
+    }, { Utility:ListLayout("H", 4, Enum.VerticalAlignment.Center, Enum.HorizontalAlignment.Right) })
+    local MinBtn = VexUI:Create("ImageButton", {
+        Parent = Controls, LayoutOrder = 1, Size = UDim2.new(0, 24, 0, 24), ThemeID = { ImageColor3 = "IconColor" },
+    })
+    SetIcon(MinBtn, "minus")
+    local CloseBtn = VexUI:Create("ImageButton", {
+        Parent = Controls, LayoutOrder = 2, Size = UDim2.new(0, 24, 0, 24), ThemeID = { ImageColor3 = "IconColor" },
+    })
+    SetIcon(CloseBtn, "x")
+
+    local TopBtnCount = 0
+    local function LayoutTopbar()
+        local total = Window.Size.X.Offset - 16
+        local f2w = TopBtnCount > 0 and (TopBtnCount * 28 + (TopBtnCount - 1) * 4 + 12) or 0
+        TopBarF2.Visible = TopBtnCount > 0
+        TopBarF2.Size = UDim2.new(0, f2w, 1, 0)
+        TopBarF2.Position = UDim2.new(1, -(F3W + 6), 0, 0)
+        local f1w = total - F3W - 6 - (f2w > 0 and f2w + 6 or 0)
+        TopBarF1.Size = UDim2.new(0, math.max(f1w, 60), 1, 0)
+    end
+    LayoutTopbar()
+
+    -- Body -------------------------------------------------------------
+    local Body = VexUI:Create("Frame", {
+        Parent = Main, Position = UDim2.new(0, 8, 0, 8 + TH + 6), Size = UDim2.new(1, -16, 1, -(8 + TH + 6 + 8)),
+        BackgroundTransparency = 1,
+    })
+
+    local TabFrame = Panel(Body, "Sidebar", 0, 16)
+    TabFrame.Size = UDim2.new(0, Window.SideBarWidth, 1, 0)
+    TabFrame.ClipsDescendants = true
+
+    local Content = VexUI:Create("Frame", {
+        Parent = Body, Position = UDim2.new(0, Window.SideBarWidth + 6, 0, 0),
+        Size = UDim2.new(1, -(Window.SideBarWidth + 6), 1, 0), BackgroundTransparency = 1,
+    })
+    local PagesHolder = VexUI:Create("Frame", {
+        Parent = Content, Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+    })
+
+    -- User frame
+    local UserFrame = VexUI:Create("Frame", {
+        Parent = TabFrame, AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -6),
+        Size = UDim2.new(1, -12, 0, 42), ClipsDescendants = true, ZIndex = 5, Visible = Window.User.Enabled or false,
+        ThemeID = { BackgroundColor3 = "Background" },
+    }, { Corner(14) })
+    local Avatar = VexUI:Create("ImageLabel", {
+        Parent = UserFrame, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0.5, 0),
+        Size = UDim2.new(0, 28, 0, 28), BackgroundTransparency = 0.7, ZIndex = 6,
+    }, { Corner(64) })
+    local UserTitle = VexUI:Create("TextLabel", {
+        Parent = UserFrame, Size = UDim2.new(1, 0, 1, 0), Text = "", TextSize = 12, TextXAlignment = Left, ZIndex = 6,
+        TextTruncate = Enum.TextTruncate.AtEnd, ThemeID = { TextColor3 = "User.Text|Text" },
+    }, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, 42), PaddingBottom = UDim.new(0, 14), PaddingRight = UDim.new(0, 4) }) })
+    local UserSub = VexUI:Create("TextLabel", {
+        Parent = UserFrame, Size = UDim2.new(1, 0, 1, 0), Text = "", TextSize = 11, TextTransparency = 0.55,
+        TextXAlignment = Left, ZIndex = 6, TextTruncate = Enum.TextTruncate.AtEnd,
+        ThemeID = { TextColor3 = "User.Text|Text" },
+    }, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, 42), PaddingTop = UDim.new(0, 14), PaddingRight = UDim.new(0, 4) }) })
+    local UserBtn = VexUI:Create("TextButton", { Parent = UserFrame, Size = UDim2.new(1, 0, 1, 0), ZIndex = 20, Visible = Window.User.Callback ~= nil })
+    UserBtn.Activated:Connect(function() Safe(Window.User.Callback) end)
+
+    local LeftScroll = VexUI:Create("ScrollingFrame", {
+        Parent = TabFrame, Position = UDim2.new(0, 0, 0, 0),
+        Size = UDim2.new(1, 0, 1, UserFrame.Visible and -54 or -4), AutomaticCanvasSize = AutoY,
+        ScrollBarThickness = 0, ScrollingDirection = Enum.ScrollingDirection.Y,
+        ElasticBehavior = Enum.ElasticBehavior.WhenScrollable, ZIndex = 3,
+    }, {
+        Utility:ListLayout("V", 4),
+        Utility:Padding({ left = 6, right = 6, top = 8, bottom = 6 }),
+    })
+
+    local function RefreshUser()
+        local anon = Window.User.Anonymous
+        UserTitle.Text = anon and "Anonymous" or LocalPlayer.DisplayName
+        UserSub.Text = anon and "@Anonymous" or ("@" .. LocalPlayer.Name)
+        task.spawn(function()
+            local ok, img = pcall(function()
+                return Players:GetUserThumbnailAsync(anon and 1 or LocalPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+            end)
+            if ok and img then Avatar.Image = img end
+        end)
+    end
+    RefreshUser()
+
+    function Window:UserEnabled(Value)
+        UserFrame.Visible = Value and true or false
+        LeftScroll.Size = UDim2.new(1, 0, 1, Value and -54 or -4)
+    end
+    function Window:Anonymous(Value)
+        Window.User.Anonymous = Value
+        RefreshUser()
+    end
+
+    -- Resize handle
+    local HandleSize = IsTouch and 30 or 22
+    local ResizeHandle = VexUI:Create("Frame", {
+        Parent = Main, AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -2, 1, -2),
+        Size = UDim2.new(0, HandleSize, 0, HandleSize), BackgroundTransparency = 1, Active = true, ZIndex = 80,
+        Visible = Window.Resizable,
+    })
+    local HandleImg = VexUI:Create("ImageLabel", {
+        Parent = ResizeHandle, Size = UDim2.new(0, 18, 0, 18), AnchorPoint = Vector2.new(1, 1),
+        Position = UDim2.new(1, -3, 1, -3), Image = "rbxassetid://97284127540888", ImageTransparency = 0.8,
+        ThemeID = { ImageColor3 = "IconColor" },
+    })
+
+    -- Tags -------------------------------------------------------------
+    local Tags = 0
+    local TagScroll
+    function Window:Tag(Cfg)
+        Cfg = Cfg or {}
+        Tags += 1
+        if not TagScroll then
+            local TagFrame = VexUI:Create("Frame", {
+                Parent = Content, AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0),
+                Size = UDim2.new(1, 0, 0, 34), ClipsDescendants = true, BackgroundTransparency = 0.2,
+                ThemeID = { BackgroundColor3 = "SideBar" },
+            }, { Corner(16), GStroke({ Alt = true }) })
+            TagScroll = VexUI:Create("ScrollingFrame", {
+                Parent = TagFrame, Size = UDim2.new(1, 0, 1, 0), ScrollBarThickness = 0, AutomaticCanvasSize = AutoX,
+                ScrollingDirection = Enum.ScrollingDirection.X,
+            }, { Utility:ListLayout("H", 5, Enum.VerticalAlignment.Center), Utility:Padding({ left = 6, right = 6 }) })
+            PagesHolder.Size = UDim2.new(1, 0, 1, -40)
+        end
+
+        local Tag = { Name = Cfg.Name or "Tag", Icon = Cfg.Icon, Color = Cfg.Color, Corner = Cfg.Corner or 16 }
+        local TagF = VexUI:Create("Frame", {
+            Parent = TagScroll, Size = UDim2.new(0, 20, 0, 24), AutomaticSize = AutoX, LayoutOrder = Tags,
+            BackgroundColor3 = Tag.Color, ThemeID = (not Tag.Color) and { BackgroundColor3 = "ElementColor" } or nil,
+        }, {
+            Corner(Tag.Corner), VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }),
+            Utility:ListLayout("H", 4, Enum.VerticalAlignment.Center),
+        })
+        local fixedColor = Tag.Color and Contrast(Tag.Color) or nil
+        local TagIcon
+        if Tag.Icon then
+            TagIcon = VexUI:Create("ImageLabel", {
+                Parent = TagF, LayoutOrder = 1, Size = UDim2.new(0, 14, 0, 14), ImageColor3 = fixedColor,
+                ThemeID = (not fixedColor) and { ImageColor3 = "Tag.Icon|IconColor" } or nil,
+            })
+            SetIcon(TagIcon, Tag.Icon)
+        end
+        local TagTitle = VexUI:Create("TextLabel", {
+            Parent = TagF, LayoutOrder = 2, Size = UDim2.new(0, 0, 0, 14), AutomaticSize = AutoX, Text = Tag.Name,
+            RichText = true, TextSize = 12, TextColor3 = fixedColor,
+            ThemeID = (not fixedColor) and { TextColor3 = "Tag.Text|Text" } or nil,
+        })
+        function Tag:SetTitle(i) TagTitle.Text = i end
+        function Tag:SetColor(i)
+            VexUI.Objects[TagF] = nil
+            TagF.BackgroundColor3 = i
+            local c = Contrast(i)
+            TagTitle.TextColor3 = c
+            if TagIcon then TagIcon.ImageColor3 = c end
+        end
+        function Tag:SetCorner(i) TagF:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, i) end
+        return Tag
+    end
+
+    -- Search -----------------------------------------------------------
+    local SearchPanel = VexUI:Create("Frame", {
+        Parent = TopBar, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, TH + 6),
+        Size = UDim2.new(0, 250, 0, 0), ClipsDescendants = true, Visible = false, ZIndex = 60,
+        ThemeID = { BackgroundColor3 = "SideBar" },
+    }, { Corner(14), GStroke({ Alt = true }) })
+    local SearchScroll = VexUI:Create("ScrollingFrame", {
+        Parent = SearchPanel, Size = UDim2.new(1, 0, 1, 0), AutomaticCanvasSize = AutoY, ScrollBarThickness = 2,
+        ZIndex = 61, ThemeID = { ScrollBarImageColor3 = "IconColor" },
+    }, { Utility:ListLayout("V", 4), Utility:Padding({ top = 6, bottom = 6, left = 6, right = 8 }) })
+
+    local function ClearSearchResults()
+        for _, v in ipairs(SearchScroll:GetChildren()) do
+            if v:IsA("GuiObject") then v:Destroy() end
+        end
+    end
+    local function Strip(s) return (tostring(s or ""):gsub("<[^>]->", "")) end
+
+    local function JumpTo(entry)
+        entry.SelectFn()
+        task.delay(0.15, function()
+            local el, sc = entry.Frame, entry.Scroll
+            if el and el.Parent and sc then
+                local y = (el.AbsolutePosition.Y - sc.AbsolutePosition.Y) + sc.CanvasPosition.Y - 8
+                sc.CanvasPosition = Vector2.new(0, math.max(0, y))
+                if el:IsA("Frame") and el.BackgroundTransparency < 1 then
+                    local base = el.BackgroundTransparency
+                    Utility:TweenObject(el, { BackgroundTransparency = 0 }, 0.15)
+                    task.delay(0.2, function()
+                        Utility:TweenObject(el, { BackgroundTransparency = base }, 0.5)
+                    end)
+                end
+            end
+        end)
+    end
+
+    local function RenderSearch(query)
+        ClearSearchResults()
+        local q = string.lower(query)
+        if q == "" then
+            Utility:TweenObject(SearchPanel, { Size = UDim2.new(0, 250, 0, 0) }, 0.15)
+            task.delay(0.16, function() if SearchBox.Text == "" then SearchPanel.Visible = false end end)
+            return
+        end
+        SearchPanel.Visible = true
+        local count = 0
+        for _, entry in ipairs(Window.SearchIndex) do
+            if entry.Title and entry.SelectFn then
+                local hay = string.lower(Strip(entry.Title) .. " " .. Strip(entry.Desc) .. " " .. tostring(entry.TabTitle or ""))
+                if string.find(hay, q, 1, true) and count < 20 then
+                    count += 1
+                    local Row = VexUI:Create("TextButton", {
+                        Parent = SearchScroll, Size = UDim2.new(1, 0, 0, 32), LayoutOrder = count, ZIndex = 62,
+                        BackgroundTransparency = 0.4, ThemeID = { BackgroundColor3 = "ElementColor" },
+                    }, { Corner(12) })
+                    local Ic = VexUI:Create("ImageLabel", {
+                        Parent = Row, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 9, 0.5, 0),
+                        Size = UDim2.new(0, 16, 0, 16), ZIndex = 63, ThemeID = { ImageColor3 = "Search.Icon|IconColor" },
+                    })
+                    SetIcon(Ic, entry.Icon or "circle")
+                    VexUI:Create("TextLabel", {
+                        Parent = Row, Position = UDim2.new(0, 32, 0, 0), Size = UDim2.new(1, -100, 1, 0),
+                        Text = Strip(entry.Title), TextSize = 12, TextXAlignment = Left, ZIndex = 63,
+                        TextTruncate = Enum.TextTruncate.AtEnd, ThemeID = { TextColor3 = "Search.Text|Text" },
+                    })
+                    VexUI:Create("TextLabel", {
+                        Parent = Row, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -8, 0, 0),
+                        Size = UDim2.new(0, 62, 1, 0), Text = tostring(entry.TabTitle or ""), TextSize = 10,
+                        TextTransparency = 0.55, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 63,
+                        TextTruncate = Enum.TextTruncate.AtEnd, ThemeID = { TextColor3 = "Search.Text|Text" },
+                    })
+                    Row.InputBegan:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                            JumpTo(entry)
+                            SearchBox.Text = ""
+                            SearchBox:ReleaseFocus()
+                        end
+                    end)
+                end
+            end
+        end
+        if count == 0 then
+            VexUI:Create("TextLabel", {
+                Parent = SearchScroll, Size = UDim2.new(1, 0, 0, 28), Text = "No results", TextSize = 11,
+                TextTransparency = 0.5, ZIndex = 62, ThemeID = { TextColor3 = "Text" },
+            })
+            count = 1
+        end
+        Utility:TweenObject(SearchPanel, { Size = UDim2.new(0, 250, 0, math.min(count * 36 + 12, 190)) }, 0.2)
+    end
+
+    SearchBox:GetPropertyChangedSignal("Text"):Connect(function() RenderSearch(SearchBox.Text) end)
+    SearchBox.Focused:Connect(function() VexUI:SetThemeKey(PillStroke, "Color", "Accent") end)
+    SearchBox.FocusLost:Connect(function()
+        VexUI:SetThemeKey(PillStroke, "Color", "Outline")
+        task.wait(0.25)
+        if not SearchBox:IsFocused() then
+            SearchBox.Text = ""
+            ClearSearchResults()
+            Utility:TweenObject(SearchPanel, { Size = UDim2.new(0, 250, 0, 0) }, 0.15)
+            task.delay(0.16, function() SearchPanel.Visible = false end)
+        end
+    end)
+
+    -- Topbar buttons ---------------------------------------------------
+    local function TopButtonBase(order)
+        TopBtnCount += 1
+        LayoutTopbar()
+        local Btn = VexUI:Create("Frame", {
+            Parent = TopBarF2, Size = UDim2.new(0, 28, 0, 28), BackgroundTransparency = 0.6, LayoutOrder = order or TopBtnCount,
+            ThemeID = { BackgroundColor3 = "Background" },
+        }, { Corner(10), GStroke({ Alt = true }) })
+        local Icon = VexUI:Create("ImageButton", {
+            Parent = Btn, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.new(1, 0, 1, 0), ImageTransparency = 1, ZIndex = 4,
+        })
+        local Img = VexUI:Create("ImageLabel", {
+            Parent = Btn, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.new(0, 16, 0, 16), ZIndex = 3, ThemeID = { ImageColor3 = "IconColor" },
+        })
+        return Btn, Icon, Img
+    end
+
+    function Window:CreateTopbarButton(Cfg)
+        Cfg = Cfg or {}
+        local B = { Icon = Cfg.Icon or "bird", Callback = Cfg.Callback or function() end, Order = Cfg.Order or 1 }
+        local Btn, Hit, Img = TopButtonBase(B.Order)
+        SetIcon(Img, B.Icon)
+        Hit.Activated:Connect(function()
+            Safe(B.Callback)
+            Utility:TweenObject(Btn, { BackgroundTransparency = 0.1 }, 0.1)
+            task.delay(0.12, function() Utility:TweenObject(Btn, { BackgroundTransparency = 0.6 }, 0.2) end)
+        end)
+        function B:SetIcon(i) SetIcon(Img, i) end
+        return B
+    end
+
+    function Window:CreateTopbarToggle(Cfg)
+        Cfg = Cfg or {}
+        local T = {
+            Icon = Cfg.Icon or "bird", Callback = Cfg.Callback or function() end, Order = Cfg.Order or 1,
+            Default = Cfg.Default or false, EnableIcon = Cfg.EnableIcon or Cfg.Icon or "bird",
+            DisableIcon = Cfg.DisableIcon or Cfg.Icon or "bird",
+            EnableBackground = Cfg.EnableBackground, DisableBackground = Cfg.DisableBackground,
+        }
+        local Btn, Hit, Img = TopButtonBase(T.Order)
+        local function state(fire)
+            local on = T.Default
+            SetIcon(Img, on and T.EnableIcon or T.DisableIcon)
+            if on then
+                if T.EnableBackground then
+                    VexUI.Objects[Btn] = nil
+                    Utility:TweenObject(Btn, { BackgroundColor3 = T.EnableBackground, BackgroundTransparency = 0 }, 0.2)
+                else
+                    VexUI:SetThemeKey(Btn, "BackgroundColor3", "Accent")
+                    Utility:TweenObject(Btn, { BackgroundTransparency = 0.3 }, 0.2)
+                end
+            else
+                if T.DisableBackground then
+                    VexUI.Objects[Btn] = nil
+                    Utility:TweenObject(Btn, { BackgroundColor3 = T.DisableBackground, BackgroundTransparency = 0.6 }, 0.2)
+                else
+                    VexUI:SetThemeKey(Btn, "BackgroundColor3", "Background")
+                    Utility:TweenObject(Btn, { BackgroundTransparency = 0.6 }, 0.2)
+                end
+            end
+            if fire then Safe(T.Callback, on) end
+        end
+        state(true)
+        Hit.Activated:Connect(function()
+            T.Default = not T.Default
+            state(true)
+        end)
+        function T:SetValue(v) T.Default = v and true or false state(true) end
+        function T:GetValue() return T.Default end
+        return T
+    end
+
+    -- Island open button (minimised state) ----------------------------
+    local MinzUI = VexUI:Create("TextButton", {
+        Parent = Island, LayoutOrder = 1, Size = UDim2.new(0, 0, 0, 30), AutomaticSize = AutoX,
+        BackgroundTransparency = 0.2, ClipsDescendants = true, ZIndex = 110,
+        ThemeID = { BackgroundColor3 = "SideBar" },
+    }, {
+        Corner(15), Utility:ListLayout("H", 5, Enum.VerticalAlignment.Center),
+        Utility:Padding({ left = 8, right = 12 }),
+    })
+    local MinzStroke = VexUI:Create("UIStroke", {
+        Parent = MinzUI, Color = Color3.new(1, 1, 1), Thickness = 1, LineJoinMode = Enum.LineJoinMode.Round,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    }, { VexUI:Create("UIGradient", { Rotation = 45 }) })
+    local MinzGrad = MinzStroke:FindFirstChildOfClass("UIGradient")
+    VexUI:AddThemeObject(MinzStroke, { Color = "Outline" })
+
+    local MinzIcon
+    if Window.Icon then
+        MinzIcon = VexUI:Create("ImageLabel", {
+            Parent = MinzUI, LayoutOrder = 1, Size = UDim2.new(0, 18, 0, 18), ZIndex = 111,
+            ThemeID = { ImageColor3 = "IconColor" },
+        })
+        SetIcon(MinzIcon, Window.Icon)
+    end
+    local MinzLabel = VexUI:Create("TextLabel", {
+        Parent = MinzUI, LayoutOrder = 2, Size = UDim2.new(0, 0, 1, 0), AutomaticSize = AutoX, Text = Window.Name,
+        TextSize = 12, ZIndex = 111, ThemeID = { TextColor3 = "Text" },
+    })
+    local MinzCorner = MinzUI:FindFirstChildOfClass("UICorner")
+    MinzUI.Visible = false
+
+    function Window:EditOpenButton(Cfg)
+        Cfg = Cfg or {}
+        local Edit = {
+            Title = Cfg.Title or Window.Name, Icon = Cfg.Icon or Window.Icon, Color = Cfg.Color,
+            Transparency = Cfg.Transparency or 0.2, Rotation = Cfg.Rotation or 45,
+            AutoRotation = Cfg.AutoRotation or false, Speed = Cfg.Speed or 15,
+            StrokeThickness = Cfg.StrokeThickness or 1, CornerRadius = Cfg.CornerRadius or UDim.new(0, 15),
+        }
+        MinzLabel.Text = Edit.Title
+        MinzCorner.CornerRadius = Edit.CornerRadius
+        if Edit.Icon then
+            if not MinzIcon then
+                MinzIcon = VexUI:Create("ImageLabel", {
+                    Parent = MinzUI, LayoutOrder = 1, Size = UDim2.new(0, 18, 0, 18), ZIndex = 111,
+                    ThemeID = { ImageColor3 = "IconColor" },
+                })
+            end
+            SetIcon(MinzIcon, Edit.Icon)
+        end
+        if Edit.Color then
+            if typeof(Edit.Color) == "Color3" then
+                MinzGrad.Color = ColorSequence.new(Edit.Color)
+            elseif typeof(Edit.Color) == "ColorSequence" then
+                MinzGrad.Color = Edit.Color
+            end
+        end
+        MinzUI.BackgroundTransparency = Edit.Transparency
+        MinzGrad.Rotation = Edit.Rotation
+        MinzStroke.Thickness = Edit.StrokeThickness
+        if Edit.AutoRotation then
+            task.spawn(function()
+                while Edit.AutoRotation and MinzUI.Parent do
+                    local dt = RunService.RenderStepped:Wait()
+                    MinzGrad.Rotation = (MinzGrad.Rotation + Edit.Speed * dt) % 360
+                end
+            end)
+        end
+        return Window, Edit
+    end
+
+    -- Tabs ------------------------------------------------------------
+    function Window:SelectTab(i)
+        local t
+        if type(i) == "number" then
+            t = Window.TabList[i]
+        else
+            for _, tab in ipairs(Window.TabList) do if tab.Title == i then t = tab break end end
+        end
+        if t and t.Select then t.Select() end
+    end
+
+    local function NewCtx(Tab, Parent, Scroll)
+        local ctx = { Window = Window, Tab = Tab, Parent = Parent, Scroll = Scroll }
+        function ctx:Register(entry)
+            entry.TabTitle = Tab.Title
+            entry.SelectFn = Tab.Select
+            entry.Scroll = self.Scroll or Scroll
+            table.insert(Window.SearchIndex, entry)
+            if self.OnAdd then self.OnAdd(entry.Frame) end
+            return entry
+        end
+        return ctx
+    end
+
+    function Window:Tab(Cfg, parentOverride)
+        Cfg = Cfg or {}
+        local Tab = {
+            Title = Cfg.Title or "Tab", Icon = Cfg.Icon, Border = Cfg.Border or false,
+            Callback = Cfg.Callback or function() end,
+        }
+
+        local TabBack = VexUI:Create("Frame", {
+            Parent = parentOverride or LeftScroll, Size = UDim2.new(1, 0, 0, 32), AutomaticSize = AutoY,
+            BackgroundTransparency = 1, LayoutOrder = #Window.TabList + 1,
+            ThemeID = { BackgroundColor3 = "Tab.Background|ElementColor" },
+        }, { Corner(11), GStroke({ Thickness = 0.6 }) })
+        local TabStroke = TabBack:FindFirstChildOfClass("UIStroke")
+        TabStroke.Transparency = 1
+
+        local TabTitle = VexUI:Create("TextLabel", {
+            Parent = TabBack, Size = UDim2.new(1, 0, 0, 32), AutomaticSize = AutoY, RichText = true, Text = Tab.Title,
+            TextSize = 13, TextWrapped = true, TextXAlignment = Left, TextTransparency = 0.45, ZIndex = 3,
+            ThemeID = { TextColor3 = "Tab.Text|Text" },
+        }, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, Tab.Icon and 38 or 14), PaddingRight = UDim.new(0, 6) }) })
+
+        local TabIcon
+        if Tab.Icon then
+            TabIcon = VexUI:Create("ImageLabel", {
+                Parent = TabBack, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 13, 0.5, 0),
+                Size = UDim2.new(0, 19, 0, 19), ImageTransparency = 0.45, ZIndex = 3,
+                ThemeID = { ImageColor3 = "Tab.IconColor|IconColor" },
+            })
+            SetIcon(TabIcon, Tab.Icon)
+        end
+        local AccentBar = VexUI:Create("Frame", {
+            Parent = TabBack, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0),
+            Size = UDim2.new(0, 3, 0, 14), BackgroundTransparency = 1, ZIndex = 4, ThemeID = { BackgroundColor3 = "Accent" },
+        }, { Corner(2) })
+        local TabTRG = VexUI:Create("TextButton", { Parent = TabBack, Size = UDim2.new(1, 0, 1, 0), ZIndex = 6 })
+
+        local Page = VexUI:Create("Frame", {
+            Parent = PagesHolder, Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 0.35, Visible = false,
+            ThemeID = { BackgroundColor3 = "SideBar" },
+        }, { Corner(16), GStroke({ Alt = true, Thickness = 0.6 }) })
+        local RightScroll = VexUI:Create("ScrollingFrame", {
+            Parent = Page, Position = UDim2.new(0, 0, 0, 5), Size = UDim2.new(1, 0, 1, -10),
+            AutomaticCanvasSize = AutoY, ScrollBarThickness = 3, ScrollBarImageTransparency = 0.4,
+            ScrollingDirection = Enum.ScrollingDirection.Y, ElasticBehavior = Enum.ElasticBehavior.WhenScrollable,
+            ClipsDescendants = true, ThemeID = { ScrollBarImageColor3 = "IconColor" },
+        }, {
+            Utility:ListLayout("V", 5),
+            Utility:Padding({ top = 5, bottom = 8, left = 6, right = 10 }),
+        })
+
+        local active = false
+        Tab._SetActive = function(state)
+            active = state
+            Utility:TweenObject(TabBack, { BackgroundTransparency = state and 0.65 or 1 }, 0.2)
+            Utility:TweenObject(TabStroke, { Transparency = (state and Tab.Border) and 0 or 1 }, 0.2)
+            Utility:TweenObject(TabTitle, { TextTransparency = state and 0 or 0.45 }, 0.2)
+            Utility:TweenObject(AccentBar, { BackgroundTransparency = state and 0 or 1 }, 0.2)
+            if TabIcon then Utility:TweenObject(TabIcon, { ImageTransparency = state and 0 or 0.45 }, 0.2) end
+            if state then
+                Page.Visible = true
+                Page.BackgroundTransparency = 0.8
+                RightScroll.Position = UDim2.new(0, 0, 0, 16)
+                Utility:TweenObject(Page, { BackgroundTransparency = 0.35 }, 0.25)
+                Utility:TweenObject(RightScroll, { Position = UDim2.new(0, 0, 0, 5) }, 0.25, QuadOut, DirOut)
+            else
+                Page.Visible = false
+            end
+        end
+
+        TabTRG.MouseEnter:Connect(function()
+            if not active then Utility:TweenObject(TabBack, { BackgroundTransparency = 0.88 }, 0.12) end
+        end)
+        TabTRG.MouseLeave:Connect(function()
+            if not active then Utility:TweenObject(TabBack, { BackgroundTransparency = 1 }, 0.12) end
+        end)
+
+        local function SelectTab()
+            if Window.CurrentTabObj == Tab and active then return end
+            for _, t in ipairs(Window.TabList) do
+                if t ~= Tab then t._SetActive(false) end
+            end
+            Window.CurrentTabObj = Tab
+            Window.CurrentTab = Tab
+            Window.ActiveElementFrame = Page
+            Tab._SetActive(true)
+            Safe(Tab.Callback)
+        end
+        Tab.Select = function() SelectTab() end
+        TabTRG.Activated:Connect(SelectTab)
+
+        table.insert(Window.Tabs, TabBack)
+        table.insert(Window.TabOrder, Tab.Title)
+        table.insert(Window.TabList, Tab)
+        table.insert(Window.SearchIndex, {
+            Title = Tab.Title, Icon = Tab.Icon or "layout-grid", Type = "Tab", TabTitle = "Tab",
+            SelectFn = SelectTab, Frame = TabBack, Scroll = RightScroll,
+        })
+
+        local ctx = NewCtx(Tab, RightScroll, RightScroll)
+        AttachElementMethods(Tab, ctx)
+
+        if #Window.TabList == 1 then
+            task.defer(function()
+                if not Window.CurrentTabObj then SelectTab() end
+            end)
+        end
+        return Tab
+    end
+
+    function Window:Section(Cfg)
+        Cfg = Cfg or {}
+        local Section = {
+            Title = Cfg.Title or "Section", Icon = Cfg.Icon, Opened = (Cfg.Opened == nil) and true or Cfg.Opened,
+        }
+        local isOpen = Section.Opened
+
+        local SectionFrame = VexUI:Create("Frame", {
+            Parent = LeftScroll, AutomaticSize = AutoY, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0),
+            LayoutOrder = #Window.TabList + 1,
+        }, { Utility:ListLayout("V", 3) })
+
+        local Head = VexUI:Create("TextButton", { Parent = SectionFrame, Size = UDim2.new(1, 0, 0, 28), ZIndex = 5 })
+        local Arrow = VexUI:Create("ImageLabel", {
+            Parent = Head, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
+            Size = UDim2.new(0, 14, 0, 14), Rotation = isOpen and 180 or 0, ThemeID = { ImageColor3 = "Text" },
+        })
+        SetIcon(Arrow, "chevron-down")
+        VexUI:Create("TextLabel", {
+            Parent = Head, Size = UDim2.new(1, 0, 1, 0), Text = Section.Title, RichText = true, TextSize = 14,
+            TextXAlignment = Left, ZIndex = 6, ThemeID = { TextColor3 = "Text" },
+        }, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, Section.Icon and 28 or 10) }) })
+        if Section.Icon then
+            local I = VexUI:Create("ImageLabel", {
+                Parent = Head, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0.5, 0),
+                Size = UDim2.new(0, 16, 0, 16), ZIndex = 6, ThemeID = { ImageColor3 = "IconColor" },
+            })
+            SetIcon(I, Section.Icon)
+        end
+
+        local Roll = VexUI:Create("Frame", {
+            Parent = SectionFrame, LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AutoY,
+            ClipsDescendants = true, BackgroundTransparency = 1,
+        }, { Utility:ListLayout("V", 4) })
+        local RollLayout = Roll:FindFirstChildOfClass("UIListLayout")
+
+        local token = 0
+        local function setOpen(open, instant)
+            isOpen = open
+            token += 1
+            local my = token
+            Utility:TweenObject(Arrow, { Rotation = open and 180 or 0 }, 0.16)
+            if open then
+                if instant then Roll.AutomaticSize = AutoY Roll.Size = UDim2.new(1, 0, 0, 0) return end
+                Roll.AutomaticSize = AutoNone
+                Utility:TweenObject(Roll, { Size = UDim2.new(1, 0, 0, Unscale(RollLayout.AbsoluteContentSize.Y)) }, 0.2)
+                task.delay(0.24, function()
+                    if token == my and isOpen then Roll.AutomaticSize = AutoY Roll.Size = UDim2.new(1, 0, 0, 0) end
+                end)
+            else
+                Roll.Size = UDim2.new(1, 0, 0, Unscale(Roll.AbsoluteSize.Y))
+                Roll.AutomaticSize = AutoNone
+                if instant then Roll.Size = UDim2.new(1, 0, 0, 0)
+                else Utility:TweenObject(Roll, { Size = UDim2.new(1, 0, 0, 0) }, 0.2) end
+            end
+        end
+        Head.Activated:Connect(function() setOpen(not isOpen) end)
+        if not isOpen then setOpen(false, true) end
+
+        function Section:Tab(c) return Window:Tab(c, Roll) end
+        function Section:Toggle(v) if v == nil then v = not isOpen end setOpen(v and true or false) end
+        return Section
+    end
+
+    -- Dialog ---------------------------------------------------------
+    function Window:Dialog(Cfg)
+        Cfg = Cfg or {}
+        local Dialog = {
+            Title = Cfg.Title or "Dialog", Desc = Cfg.Desc, Buttons = Cfg.Buttons or {}, Image = Cfg.Image,
+            ImageSizeY = Cfg.ImageSizeY or 60, Count = 0,
+        }
+        local Overlay = VexUI:Create("Frame", {
+            Parent = Main, Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(0, 0, 0),
+            BackgroundTransparency = 1, Active = true, ZIndex = 100,
+        }, { Corner(18) })
+        Utility:TweenObject(Overlay, { BackgroundTransparency = 0.45 }, 0.2)
+
+        local Scale = VexUI:Create("UIScale", { Scale = 0.9 })
+        local Card = VexUI:Create("Frame", {
+            Parent = Overlay, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.new(0, math.min(250, Window.Size.X.Offset - 40), 0, 0), AutomaticSize = AutoY,
+            Active = true, ZIndex = 101, ThemeID = { BackgroundColor3 = "Dialog.Background|SideBar" },
+        }, {
+            Corner(16), GStroke({ Alt = true }), Scale, Utility:ListLayout("V", 8), Utility:Padding(12),
+        })
+        Utility:TweenObject(Scale, { Scale = 1 }, 0.25, Enum.EasingStyle.Back, DirOut)
+
+        if Dialog.Image then
+            VexUI:Create("ImageLabel", {
+                Parent = Card, Size = UDim2.new(1, 0, 0, Dialog.ImageSizeY), Image = Dialog.Image,
+                ScaleType = Enum.ScaleType.Crop, LayoutOrder = 0, ZIndex = 102,
+            }, { Corner(12) })
+        end
+        CreateText(Card, Dialog.Title, { TextSize = 14, LayoutOrder = 1, ZIndex = 102, ThemeKey = "Dialog.Text|Text" })
+        if Dialog.Desc then
+            CreateText(Card, Dialog.Desc, {
+                TextSize = 12, LayoutOrder = 2, TextTransparency = 0.4, ZIndex = 102, ThemeKey = "Dialog.Text|Text",
+                FontFace = TextFontRegular,
+            })
+        end
+
+        local function Close()
+            Utility:TweenObject(Overlay, { BackgroundTransparency = 1 }, 0.2)
+            Utility:TweenObject(Scale, { Scale = 0.9 }, 0.2)
+            task.delay(0.22, function() Overlay:Destroy() end)
+        end
+        Dialog.Close = Close
+
+        local ButtonsFrame = VexUI:Create("Frame", {
+            Parent = Card, LayoutOrder = 3, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AutoY,
+            BackgroundTransparency = 1, ZIndex = 102,
+        }, { Utility:ListLayout("V", 6) })
+        for i = 1, #Dialog.Buttons, 2 do
+            local Row = VexUI:Create("Frame", {
+                Parent = ButtonsFrame, LayoutOrder = i, Size = UDim2.new(1, 0, 0, IsTouch and 36 or 32),
+                BackgroundTransparency = 1, ZIndex = 102,
+            }, { Utility:ListLayout("H", 6) })
+            local pair = { Dialog.Buttons[i], Dialog.Buttons[i + 1] }
+            local n = pair[2] and 2 or 1
+            for col = 1, n do
+                local BC = pair[col]
+                Dialog.Count += 1
+                local B = VexUI:Create("TextButton", {
+                    Parent = Row, LayoutOrder = col, Size = (n == 1) and UDim2.new(1, 0, 1, 0) or UDim2.new(0.5, -3, 1, 0),
+                    Text = BC.Text or "Button", TextSize = 13, BackgroundTransparency = BC.Primary and 0.1 or 0.3, ZIndex = 103,
+                    ThemeID = {
+                        BackgroundColor3 = BC.Primary and "Accent" or "Dialog.Button|ElementColor", TextColor3 = "Text",
+                    },
+                }, { Corner(11) })
+                B.Activated:Connect(function()
+                    Safe(BC.Callback)
+                    Close()
+                end)
+            end
+        end
+        return Dialog
+    end
+
+    -- proxy on UI so old code (UI:Dialog / UI:CreateTopbarButton) still works
+    UI.Dialog = function(_, c) return Window:Dialog(c) end
+    UI.CreateTopbarButton = function(_, c) return Window:CreateTopbarButton(c) end
+    UI.CreateTopbarToggle = function(_, c) return Window:CreateTopbarToggle(c) end
+
+    -- Scale ----------------------------------------------------------
+    local function ComputeAutoScale()
+        local cam = workspace.CurrentCamera
+        if not cam then return 1 end
+        local vp = cam.ViewportSize
+        local margin = IsMobile and 14 or 40
+        local sx = (vp.X - margin * 2) / Window.Size.X.Offset
+        local sy = (vp.Y - margin * 2) / Window.Size.Y.Offset
+        return math.clamp(math.min(sx, sy), 0.35, 1)
+    end
+    function Window:SetUIScale(v)
+        Window._ManualScale = true
+        Utility.Scale = v
+        Utility:TweenObject(MainScale, { Scale = v }, 0.2, Enum.EasingStyle.Quint, DirOut)
+        return Window
+    end
+    function Window:SetAutoScale(v)
+        Window.AutoScale = v and true or false
+        if Window.AutoScale then
+            Window._ManualScale = false
+            local s = ComputeAutoScale()
+            Utility.Scale = s
+            Utility:TweenObject(MainScale, { Scale = s }, 0.2)
+        end
+    end
+    function Window:GetUIScale() return Window.Size end
+    local function ApplyAutoScale()
+        if Window.AutoScale and not Window._ManualScale then
+            local s = ComputeAutoScale()
+            Utility.Scale = s
+            Utility:TweenObject(MainScale, { Scale = s }, 0.2)
+        end
+    end
+    do
+        local s = Window.AutoScale and ComputeAutoScale() or 1
+        Utility.Scale = s
+        MainScale.Scale = s
+    end
+    local cam = workspace.CurrentCamera
+    if cam then Window:_Connect(cam:GetPropertyChangedSignal("ViewportSize"), ApplyAutoScale) end
+
+    -- Resize ---------------------------------------------------------
+    function Window:Resize(sizeX, sizeY, instant)
+        local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
+        local scale = math.max(Utility.Scale, 0.01)
+        local maxX = math.min(MAX_W, math.floor((vp.X - 8) / scale))
+        local maxY = math.min(MAX_H, math.floor((vp.Y - 8) / scale))
+        sizeX = math.clamp(sizeX, MIN_W, math.max(MIN_W, maxX))
+        sizeY = math.clamp(sizeY, MIN_H, math.max(MIN_H, maxY))
+        Window.Size = UDim2.new(0, sizeX, 0, sizeY)
+        if instant then
+            Main.Size = Window.Size
+        else
+            Utility:TweenObject(Main, { Size = Window.Size }, 0.25, Enum.EasingStyle.Back, DirOut)
+        end
+        LayoutTopbar()
+    end
+    function Window:GetWindowSize() return Window.Size.X.Offset, Window.Size.Y.Offset end
+    function Window:SetResizable(v)
+        Window.Resizable = v and true or false
+        ResizeHandle.Visible = Window.Resizable
+    end
+
+    do
+        local resizing, rInput, startPos, startSize = false, nil, nil, nil
+        ResizeHandle.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                resizing = true
+                rInput = input
+                startPos = input.Position
+                startSize = Window.Size
+                Utility:TweenObject(HandleImg, { ImageTransparency = 0 }, 0.1)
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        resizing = false
+                        Utility:TweenObject(HandleImg, { ImageTransparency = 0.8 }, 0.15)
+                    end
+                end)
+            end
+        end)
+        ResizeHandle.MouseEnter:Connect(function() Utility:TweenObject(HandleImg, { ImageTransparency = 0.35 }, 0.15) end)
+        ResizeHandle.MouseLeave:Connect(function()
+            if not resizing then Utility:TweenObject(HandleImg, { ImageTransparency = 0.8 }, 0.15) end
+        end)
+        Window:_Connect(UserInputService.InputChanged, function(input)
+            if resizing and (input == rInput or input.UserInputType == Enum.UserInputType.MouseMovement) then
+                local d = (input.Position - startPos) / math.max(Utility.Scale, 0.01)
+                Window:Resize(startSize.X.Offset + d.X, startSize.Y.Offset + d.Y, true)
+            end
+        end)
+    end
+
+    -- Dragging (topbar only) ----------------------------------------
+    table.insert(Window._Connections, EnableDragging(TopBarF1, Main))
+
+    -- Open / Close ---------------------------------------------------
+    function Window:Open()
+        if Window.IslandOpen then return end
+        Window.IslandOpen = true
+        UI.IslandOpen = true
+        Window.Default = "Default"
+        Main.Visible = true
+        Main.Size = UDim2.new(0, Window.Size.X.Offset, 0, 0)
+        Utility:TweenObject(Main, { Size = Window.Size }, 0.3, Enum.EasingStyle.Back, DirOut)
+        local t = Window.TransparencyNum
+        Utility:TweenObject(Main, { BackgroundTransparency = t }, 0.25)
+        ResizeHandle.Visible = Window.Resizable
+        ShowIsland(false)
+        task.delay(0.3, function() MinzUI.Visible = false end)
+    end
+    function Window:Close()
+        if not Window.IslandOpen then return end
+        Window.IslandOpen = false
+        UI.IslandOpen = false
+        Window.Default = "Minimize"
+        MinzUI.Visible = true
+        ResizeHandle.Visible = false
+        Utility:TweenObject(Main, { Size = UDim2.new(0, Window.Size.X.Offset, 0, 0), BackgroundTransparency = 1 }, 0.25, QuadIn, DirIn)
+        task.delay(0.26, function() if not Window.IslandOpen then Main.Visible = false end end)
+        ShowIsland(true)
+    end
+    function Window:Toggle()
+        if Window.IslandOpen then Window:Close() else Window:Open() end
+    end
+
+    MinBtn.Activated:Connect(function() Window:Close() end)
+    MinzUI.Activated:Connect(function() Window:Open() end)
+
+    function Window:OnDestroy(cb) Window._OnDestroy = cb or function() end end
+    function Window:Destroy()
+        Safe(Window._OnDestroy)
+        for _, c in ipairs(Window._Connections) do pcall(function() c:Disconnect() end) end
+        Window._Connections = {}
+        Window.IslandOpen = false
+        ResizeHandle.Visible = false
+        Utility:TweenObject(Main, { Size = UDim2.new(0, Window.Size.X.Offset, 0, 0), BackgroundTransparency = 1 }, 0.25, QuadIn, DirIn)
+        for i, w in ipairs(UI.Windows) do if w == Window then table.remove(UI.Windows, i) break end end
+        task.delay(0.27, function()
+            if #UI.Windows == 0 then
+                UIScreen:Destroy()
+            else
+                Main:Destroy()
+                MinzUI:Destroy()
+            end
+        end)
+    end
+    CloseBtn.Activated:Connect(function() Window:Destroy() end)
+
+    -- Toggle key ----------------------------------------------------
+    Window:_Connect(UserInputService.InputBegan, function(input, gp)
+        if gp then return end
+        if input.KeyCode == Window.ToggleKey then Window:Toggle() end
+    end)
+    function Window:SetToggleKey(v)
+        if type(v) == "string" then v = Enum.KeyCode[v] end
+        Window.ToggleKey = v or Window.ToggleKey
+        return Window
+    end
+
+    -- Misc API --------------------------------------------------------
+    function Window:SetTitle(v) LibName.Text = v MinzLabel.Text = v end
+    function Window:SetAuthor(v)
+        Window.Author = v
+        LibAuthor.Text = v or ""
+        LibAuthor.Visible = v ~= nil and v ~= ""
+        LibName.TextYAlignment = LibAuthor.Visible and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center
+        LibName.UIPadding.PaddingTop = UDim.new(0, LibAuthor.Visible and 5 or 0)
+    end
+    function Window:ToCenter()
+        Utility:TweenObject(Main, { Position = UDim2.new(0.5, 0, 0.5, 0) }, 0.2)
+    end
+    function Window:SetTransparency(Value)
+        if typeof(Value) == "boolean" then
+            Window.TransparencyNum = Value and 0.3 or 0
+        elseif typeof(Value) == "number" then
+            Window.TransparencyNum = math.clamp(Value, 0, 1)
+        else
+            return Window
+        end
+        ApplySurfaces()
+        return Window
+    end
+    function Window:GetTransparency() return Window.TransparencyNum end
+    function Window:GetTheme() return Window.Theme end
+    function Window:Notify(c) return UI:Notification(c) end
+
+    ApplySurfaces()
+    ShowIsland(false)
+    Island.Visible = false
+
+    return Window
+end
+
+return UIocalPlayer
+local IsTouch = UserInputService.TouchEnabled
+local IsMobile = IsTouch and not UserInputService.KeyboardEnabled
+
+--// Enum shortcuts
+local AutoY, AutoXY, AutoX, AutoNone = Enum.AutomaticSize.Y, Enum.AutomaticSize.XY, Enum.AutomaticSize.X, Enum.AutomaticSize.None
+local Left, Center = Enum.TextXAlignment.Left, Enum.TextXAlignment.Center
+local QuadOut, QuadIn, QuadInOut = Enum.EasingStyle.Quad, Enum.EasingStyle.Quad, Enum.EasingStyle.Quad
+local DirOut, DirIn = Enum.EasingDirection.Out, Enum.EasingDirection.In
+
+local DefaultH = IsMobile and 44 or 40
+
+----------------------------------------------------------------------
+-- Utility
+----------------------------------------------------------------------
+local Utility = { Scale = 1 }
+
+function Utility:TweenObject(obj, properties, duration, ...)
+    if not obj then return end
+    local info
+    if select("#", ...) == 0 then
+        info = TweenInfo.new(duration or 0.2, QuadOut, DirOut)
+    else
+        info = TweenInfo.new(duration or 0.2, ...)
+    end
+    local ok, tween = pcall(TweenService.Create, TweenService, obj, info, properties)
+    if ok and tween then
+        tween:Play()
+        return tween
+    end
+end
+
+local function Safe(fn, ...)
+    if type(fn) ~= "function" then return end
+    local args = table.pack(...)
+    task.spawn(function()
+        local ok, err = pcall(fn, table.unpack(args, 1, args.n))
+        if not ok then warn("[VexUI] callback error: " .. tostring(err)) end
+    end)
+end
+
+local function Unscale(px)
+    return px / math.max(Utility.Scale, 0.01)
+end
+
+local function Decimals(n)
+    local d = tostring(n):match("%.(%d+)")
+    return d and #d or 0
+end
+
+local function RoundTo(v, step)
+    step = (step and step > 0) and step or 1
+    local r = math.floor(v / step + 0.5) * step
+    local d = Decimals(step)
+    return tonumber(string.format("%." .. d .. "f", r)) or r
+end
+
+local function Contrast(c)
+    local l = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B
+    return l > 0.6 and Color3.fromRGB(20, 20, 20) or Color3.new(1, 1, 1)
+end
+
+local PaletteColors = {
+    Red = Color3.fromRGB(255, 45, 85), Green = Color3.fromRGB(52, 255, 130),
+    Blue = Color3.fromRGB(64, 156, 255), Orange = Color3.fromRGB(255, 159, 10),
+    Purple = Color3.fromRGB(191, 90, 255), Yellow = Color3.fromRGB(255, 224, 20),
+    Pink = Color3.fromRGB(255, 55, 130), Cyan = Color3.fromRGB(50, 220, 255),
+    Mint = Color3.fromRGB(50, 255, 200), Coral = Color3.fromRGB(255, 100, 60),
+}
+
+local function ResolveColor(c)
+    if typeof(c) == "Color3" then return c end
+    if typeof(c) == "string" then
+        for k, v in pairs(PaletteColors) do
+            if k:lower() == c:lower() then return v end
+        end
+        warn("[VexUI] Unknown color name '" .. c .. "'")
+    end
+    return nil
+end
+
+local TextFont = Font.new([[rbxassetid://12187365364]], Enum.FontWeight.SemiBold, Enum.FontStyle.Normal)
+local TextFontRegular = Font.new([[rbxassetid://12187365364]], Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+
+----------------------------------------------------------------------
+-- GUI parent
+----------------------------------------------------------------------
+local function GetGuiParent()
+    local ok, cg = pcall(function() return game:GetService("CoreGui") end)
+    if ok and cg then
+        local t = pcall(function()
+            local f = Instance.new("Folder")
+            f.Parent = cg
+            f:Destroy()
+        end)
+        if t then return cg end
+    end
+    local ok2, hui = pcall(function() return gethui and gethui() end)
+    if ok2 and hui then return hui end
+    return LocalPlayer:WaitForChild("PlayerGui")
+end
+
+----------------------------------------------------------------------
+-- Icons
+----------------------------------------------------------------------
+local IconsV2
+do
+    local url = "https://raw.githubusercontent.com/Footagesus/Icons/main/Main-v2.lua"
+    local ok, lib = pcall(function()
+        local src
+        local ok1, r1 = pcall(function() return game:HttpGetAsync(url) end)
+        if ok1 and r1 then
+            src = r1
+        else
+            src = game:HttpGet(url)
+        end
+        return loadstring(src)()
+    end)
+    IconsV2 = ok and lib or nil
+    if IconsV2 then pcall(IconsV2.SetIconsType, "lucide") end
+end
+
+local IconCache = {}
+local function ResolveIcon(icon)
+    if icon == nil or icon == "" then return nil end
+    if typeof(icon) == "table" then return icon end
+    if typeof(icon) ~= "string" then return nil end
+    if icon:find("rbxassetid://") or icon:find("rbxasset://") then return icon end
+    if icon:match("^%d+$") then return "rbxassetid://" .. icon end
+    local cached = IconCache[icon]
+    if cached ~= nil then return cached or nil end
+    if not IconsV2 then return nil end
+    local pack, name = icon:match("^([^:]+):(.+)$")
+    local result
+    pcall(function()
+        if pack and name then
+            IconsV2.SetIconsType(string.lower(pack))
+            result = IconsV2.GetIcon(name)
+            IconsV2.SetIconsType("lucide")
+        else
+            IconsV2.SetIconsType("lucide")
+            result = IconsV2.GetIcon(icon)
+        end
+    end)
+    IconCache[icon] = result or false
+    return result
+end
+
+local function SetIcon(img, icon)
+    local r = ResolveIcon(icon)
+    if typeof(r) == "table" then
+        img.Image = r.Image or ""
+        local off = r.ImageRectOffset or r.ImageRectPosition
+        if off then img.ImageRectOffset = off end
+        if r.ImageRectSize then img.ImageRectSize = r.ImageRectSize end
+        return true
+    elseif typeof(r) == "string" then
+        img.Image = r
+        return true
+    end
+    return false
+end
+
+----------------------------------------------------------------------
+-- Core tables
+----------------------------------------------------------------------
+local UI = {
+    Theme = nil, Themes = {}, Notifications = 0, IslandOpen = true,
+    Windows = {}, Version = "2.0.0", Window = nil,
+}
+local VexUI = { Objects = {}, Listeners = {} }
+
+VexUI.DefaultProps = {
+    TextButton = { AutoButtonColor = false, BorderSizePixel = 0, Text = "", FontFace = TextFont, TextSize = 12, BackgroundTransparency = 1 },
+    TextLabel = { BorderSizePixel = 0, FontFace = TextFont, TextSize = 12, Text = "", BackgroundTransparency = 1 },
+    TextBox = { BorderSizePixel = 0, FontFace = TextFont, TextSize = 12, BackgroundTransparency = 1 },
+    ImageLabel = { BorderSizePixel = 0, BackgroundTransparency = 1 },
+    ImageButton = { BorderSizePixel = 0, AutoButtonColor = false, BackgroundTransparency = 1 },
+    Frame = { BorderSizePixel = 0 },
+    ScrollingFrame = { BorderSizePixel = 0, ScrollBarThickness = 3, BackgroundTransparency = 1, CanvasSize = UDim2.new() },
+}
+
+VexUI.Themes = {
+    Dark = {
+        Name = "Dark", Background = Color3.fromRGB(10, 10, 10), SideBar = Color3.fromRGB(17, 17, 17),
+        Text = Color3.fromRGB(255, 255, 255), ElementColor = Color3.fromRGB(35, 35, 35),
+        Outline = Color3.fromRGB(55, 55, 55), Placeholder = Color3.fromRGB(10, 10, 10),
+        IconColor = Color3.fromRGB(255, 255, 255), Accent = Color3.fromRGB(104, 136, 255),
+    },
+    Light = {
+        Name = "Light", Background = Color3.fromRGB(245, 245, 245), SideBar = Color3.fromRGB(235, 235, 235),
+        Text = Color3.fromRGB(20, 20, 20), ElementColor = Color3.fromRGB(200, 200, 200),
+        Outline = Color3.fromRGB(200, 200, 200), Placeholder = Color3.fromRGB(180, 180, 180),
+        IconColor = Color3.fromRGB(20, 20, 20), Accent = Color3.fromRGB(59, 110, 240),
+    },
+    Forest = {
+        Name = "Forest", Background = Color3.fromRGB(20, 24, 22), SideBar = Color3.fromRGB(28, 32, 30),
+        Text = Color3.fromRGB(225, 235, 225), ElementColor = Color3.fromRGB(50, 60, 55),
+        Outline = Color3.fromRGB(80, 95, 85), Placeholder = Color3.fromRGB(28, 32, 30),
+        IconColor = Color3.fromRGB(225, 235, 225), Accent = Color3.fromRGB(96, 210, 130),
+    },
+    Amethyst = {
+        Name = "Amethyst", Background = Color3.fromRGB(18, 14, 24), SideBar = Color3.fromRGB(27, 21, 36),
+        Text = Color3.fromRGB(240, 235, 250), ElementColor = Color3.fromRGB(40, 32, 52),
+        Outline = Color3.fromRGB(70, 55, 95), Placeholder = Color3.fromRGB(18, 14, 24),
+        IconColor = Color3.fromRGB(170, 120, 230), Accent = Color3.fromRGB(176, 124, 240),
+    },
+    Ocean = {
+        Name = "Ocean", Background = Color3.fromRGB(8, 16, 24), SideBar = Color3.fromRGB(12, 24, 36),
+        Text = Color3.fromRGB(225, 240, 250), ElementColor = Color3.fromRGB(24, 44, 64),
+        Outline = Color3.fromRGB(46, 80, 110), Placeholder = Color3.fromRGB(8, 16, 24),
+        IconColor = Color3.fromRGB(225, 240, 250), Accent = Color3.fromRGB(56, 189, 248),
+    },
+    Rose = {
+        Name = "Rose", Background = Color3.fromRGB(24, 12, 16), SideBar = Color3.fromRGB(33, 17, 23),
+        Text = Color3.fromRGB(255, 235, 240), ElementColor = Color3.fromRGB(58, 30, 40),
+        Outline = Color3.fromRGB(100, 50, 66), Placeholder = Color3.fromRGB(24, 12, 16),
+        IconColor = Color3.fromRGB(255, 235, 240), Accent = Color3.fromRGB(251, 113, 133),
+    },
+    Midnight = {
+        Name = "Midnight", Background = Color3.fromRGB(5, 7, 15), SideBar = Color3.fromRGB(10, 13, 26),
+        Text = Color3.fromRGB(230, 235, 255), ElementColor = Color3.fromRGB(22, 28, 52),
+        Outline = Color3.fromRGB(44, 54, 98), Placeholder = Color3.fromRGB(5, 7, 15),
+        IconColor = Color3.fromRGB(230, 235, 255), Accent = Color3.fromRGB(129, 140, 248),
+    },
+    Sunset = {
+        Name = "Sunset", Background = Color3.fromRGB(26, 16, 12), SideBar = Color3.fromRGB(36, 22, 16),
+        Text = Color3.fromRGB(255, 240, 230), ElementColor = Color3.fromRGB(64, 38, 28),
+        Outline = Color3.fromRGB(110, 66, 48), Placeholder = Color3.fromRGB(26, 16, 12),
+        IconColor = Color3.fromRGB(255, 240, 230), Accent = Color3.fromRGB(255, 150, 70),
+    },
+}
+UI.Themes = VexUI.Themes
+UI.Theme = VexUI.Themes.Dark
+
+function VexUI:Create(class, properties, children)
+    properties = properties or {}
+    local inst = Instance.new(class)
+
+    local defaults = VexUI.DefaultProps[class]
+    if defaults then
+        for prop, val in next, defaults do
+            if properties[prop] == nil then inst[prop] = val end
+        end
+    end
+
+    for prop, value in next, properties do
+        if prop ~= "ThemeID" and prop ~= "Parent" then
+            inst[prop] = value
+        end
+    end
+
+    for _, child in next, children or {} do
+        child.Parent = inst
+    end
+
+    if properties.ThemeID then
+        VexUI:AddThemeObject(inst, properties.ThemeID)
+    end
+    if properties.Parent then
+        inst.Parent = properties.Parent
+    end
+    return inst
+end
+
+function VexUI:GetThemeProperty(property, theme, fallbackProperty)
+    local function resolve(t, key)
+        for _, part in ipairs(string.split(key, ".")) do
+            if type(t) ~= "table" then return nil end
+            t = t[part]
+        end
+        return t
+    end
+    return resolve(theme, property)
+        or resolve(VexUI.Themes.Dark, property)
+        or (fallbackProperty and (resolve(theme, fallbackProperty) or resolve(VexUI.Themes.Dark, fallbackProperty)))
+end
+
+function VexUI:AddThemeObject(object, properties)
+    local copy = {}
+    for k, v in pairs(properties) do copy[k] = v end
+    VexUI.Objects[object] = { Object = object, Properties = copy }
+    pcall(function()
+        object.Destroying:Connect(function() VexUI.Objects[object] = nil end)
+    end)
+    VexUI:UpdateTheme(object, false)
+    return object
+end
+
+function VexUI:SetThemeKey(object, property, key)
+    local data = VexUI.Objects[object]
+    if data then
+        data.Properties[property] = key
+        VexUI:UpdateTheme(object, true)
+    else
+        VexUI:AddThemeObject(object, { [property] = key })
+    end
+end
+
+function VexUI:UpdateTheme(targetObject, isTween)
+    local function Apply(objData)
+        local obj = objData.Object
+        if not obj then return end
+        for property, colorKey in pairs(objData.Properties or {}) do
+            local color
+            for _, key in ipairs(string.split(colorKey, "|")) do
+                key = key:gsub("%s+", "")
+                color = VexUI:GetThemeProperty(key, UI.Theme)
+                if color then break end
+            end
+            if color then
+                if isTween then
+                    Utility:TweenObject(obj, { [property] = color }, 0.25)
+                else
+                    pcall(function() obj[property] = color end)
+                end
+            end
+        end
+    end
+
+    if targetObject then
+        local data = VexUI.Objects[targetObject]
+        if data then Apply(data) end
+    else
+        for _, data in pairs(VexUI.Objects) do Apply(data) end
+    end
+end
+
+function VexUI:SetTheme(themeName)
+    local theme = VexUI.Themes[themeName]
+    if not theme then
+        warn("Theme '" .. tostring(themeName) .. "' not found.")
+        return false
+    end
+    UI.Theme = theme
+    VexUI:UpdateTheme(nil, true)
+    for _, fn in ipairs(VexUI.Listeners) do Safe(fn, theme) end
+    return true
+end
+
+function UI:SetTheme(name) return VexUI:SetTheme(name) end
+function UI:AddTheme(i)
+    VexUI.Themes[i.Name] = i
+    return i
+end
+function UI:GetThemes()
+    local list = {}
+    for name in pairs(VexUI.Themes) do table.insert(list, name) end
+    table.sort(list)
+    return list
+end
+function UI:OnThemeChanged(fn) table.insert(VexUI.Listeners, fn) end
+
+----------------------------------------------------------------------
+-- Small builders
+----------------------------------------------------------------------
+function Utility:Padding(a, b, c, d)
+    if type(a) == "table" then
+        return VexUI:Create("UIPadding", {
+            PaddingTop = UDim.new(0, a.top or 0), PaddingBottom = UDim.new(0, a.bottom or 0),
+            PaddingLeft = UDim.new(0, a.left or 0), PaddingRight = UDim.new(0, a.right or 0),
+        })
+    end
+    return VexUI:Create("UIPadding", {
+        PaddingTop = UDim.new(0, a or 0), PaddingBottom = UDim.new(0, b or a or 0),
+        PaddingLeft = UDim.new(0, c or a or 0), PaddingRight = UDim.new(0, d or c or a or 0),
+    })
+end
+
+function Utility:ListLayout(dir, padding, valign, halign)
+    return VexUI:Create("UIListLayout", {
+        FillDirection = (dir == "H") and Enum.FillDirection.Horizontal or Enum.FillDirection.Vertical,
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, padding or 5),
+        VerticalAlignment = valign,
+        HorizontalAlignment = halign,
+    })
+end
+
+local function Corner(r)
+    return VexUI:Create("UICorner", { CornerRadius = UDim.new(0, r or 12) })
+end
+
+local StrokeSeqCard = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(0.1, 1),
+    NumberSequenceKeypoint.new(0.5, 1), NumberSequenceKeypoint.new(0.8, 1),
+    NumberSequenceKeypoint.new(1, 0.1),
+})
+local StrokeSeqAlt = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(0.5, 1), NumberSequenceKeypoint.new(1, 1),
+})
+
+local function GStroke(opts)
+    opts = opts or {}
+    return VexUI:Create("UIStroke", {
+        Color = Color3.new(1, 1, 1),
+        LineJoinMode = Enum.LineJoinMode.Round,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        Thickness = opts.Thickness or 0.8,
+        ThemeID = { Color = opts.Key or "Outline" },
+    }, {
+        VexUI:Create("UIGradient", {
+            Transparency = opts.Alt and StrokeSeqAlt or StrokeSeqCard,
+            Rotation = opts.Rotation or (opts.Alt and -110 or 75),
+        }),
+    })
+end
+
+----------------------------------------------------------------------
+-- Rich text + inline icon helper
+----------------------------------------------------------------------
+local RichTags = {
+    b = true, i = true, u = true, s = true, br = true, font = true, stroke = true, mark = true,
+    uppercase = true, smallcaps = true, sc = true, uc = true, p = true,
+}
+
+local function ParseLine(line)
+    local segs, pos, scan = {}, 1, 1
+    local hasIcon = false
+    while true do
+        local s, e, name = line:find("<([%w_%-:]+)>", scan)
+        if not s then break end
+        if not RichTags[name:lower()] and ResolveIcon(name) then
+            if s > pos then table.insert(segs, { t = "text", v = line:sub(pos, s - 1) }) end
+            table.insert(segs, { t = "icon", v = name })
+            hasIcon = true
+            pos = e + 1
+            scan = e + 1
+        else
+            scan = e + 1
+        end
+    end
+    if pos <= #line then table.insert(segs, { t = "text", v = line:sub(pos) }) end
+    return segs, hasIcon
+end
+
+local function CreateText(parent, text, props)
+    props = props or {}
+    local textSize = props.TextSize or 13
+    local themeKey = props.ThemeKey or "Text"
+
+    local pad = VexUI:Create("UIPadding", {
+        PaddingLeft = UDim.new(0, props.PaddingLeft or 0),
+        PaddingRight = UDim.new(0, props.PaddingRight or 0),
+    })
+    local container = VexUI:Create("Frame", {
+        Parent = parent, BackgroundTransparency = 1,
+        AutomaticSize = props.AutomaticSize or AutoY,
+        Size = props.Size or UDim2.new(1, 0, 0, 0),
+        LayoutOrder = props.LayoutOrder or 0,
+        Position = props.Position,
+        ZIndex = props.ZIndex or 1,
+        Visible = props.Visible ~= false,
+    }, {
+        VexUI:Create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 2) }),
+        pad,
+    })
+
+    local function mkLabel(str, order, par, inRow)
+        return VexUI:Create("TextLabel", {
+            Parent = par, LayoutOrder = order,
+            AutomaticSize = inRow and AutoXY or AutoY,
+            Size = inRow and UDim2.new() or UDim2.new(1, 0, 0, 0),
+            Text = str, RichText = props.RichText ~= false,
+            TextSize = textSize, FontFace = props.FontFace or TextFont,
+            TextColor3 = props.TextColor3 or Color3.new(1, 1, 1),
+            TextTransparency = props.TextTransparency or 0,
+            TextWrapped = (not inRow) and props.TextWrapped ~= false,
+            TextXAlignment = props.TextXAlignment or Left,
+            TextYAlignment = inRow and Enum.TextYAlignment.Center or Enum.TextYAlignment.Top,
+            ThemeID = (not props.Static) and { TextColor3 = themeKey } or nil,
+        })
+    end
+
+    local current = ""
+    local function Render(newText)
+        for _, c in ipairs(container:GetChildren()) do
+            if c:IsA("GuiObject") then c:Destroy() end
+        end
+        current = tostring(newText or "")
+        local lines = string.split((current:gsub("\\n", "\n")), "\n")
+        for idx, line in ipairs(lines) do
+            local segs, hasIcon = ParseLine(line)
+            if not hasIcon then
+                mkLabel(line == "" and " " or line, idx, container, false)
+            else
+                local row = VexUI:Create("Frame", {
+                    Parent = container, BackgroundTransparency = 1, AutomaticSize = AutoXY,
+                    Size = UDim2.new(), LayoutOrder = idx,
+                }, { Utility:ListLayout("H", 3, Enum.VerticalAlignment.Center) })
+                for order, seg in ipairs(segs) do
+                    if seg.t == "text" then
+                        mkLabel(seg.v, order, row, true)
+                    else
+                        local img = VexUI:Create("ImageLabel", {
+                            Parent = row, LayoutOrder = order,
+                            Size = UDim2.new(0, textSize + 3, 0, textSize + 3),
+                            ScaleType = Enum.ScaleType.Fit,
+                            ImageColor3 = props.TextColor3 or Color3.new(1, 1, 1),
+                            ImageTransparency = props.TextTransparency or 0,
+                            ThemeID = (not props.Static) and { ImageColor3 = themeKey } or nil,
+                        })
+                        SetIcon(img, seg.v)
+                    end
+                end
+            end
+        end
+    end
+    Render(text)
+
+    return {
+        Frame = container,
+        UIPadding = pad,
+        SetText = Render,
+        GetText = function() return current end,
+        SetVisible = function(v) container.Visible = v end,
+    }
+end
+
+function Utility:ElText(parent, title, desc, props)
+    props = props or {}
+    local Title = CreateText(parent, title, {
+        TextSize = 13, PaddingLeft = 12, LayoutOrder = 1, Static = props.Static,
+        TextColor3 = props.TextColor3,
+    })
+    local hasDesc = desc ~= nil and desc ~= ""
+    local Desc = CreateText(parent, desc or "", {
+        TextSize = 12, PaddingLeft = 12, LayoutOrder = 2, TextTransparency = 0.55,
+        Static = props.Static, TextColor3 = props.TextColor3, Visible = hasDesc,
+    })
+    return Title, Desc
+end
+
+function Utility:Search(Window, cfg)
+    table.insert(Window.SearchIndex, cfg)
+end
+
+function Utility:T(scope, prop, fallback)
+    return scope .. "." .. prop .. "|" .. fallback
+end
+
+local function LockedElm(Frame, Stat)
+    local L = Frame:FindFirstChild("VexLock")
+    if not L then
+        L = VexUI:Create("Frame", {
+            Name = "VexLock", Parent = Frame, Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 0.3, Active = true, ZIndex = 50, Visible = false,
+            ThemeID = { BackgroundColor3 = "Background" },
+        }, { Corner(14) })
+        local icon = VexUI:Create("ImageLabel", {
+            Parent = L, Size = UDim2.new(0, 20, 0, 20), AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(0.5, 0, 0.5, 0), ZIndex = 51,
+            ThemeID = { ImageColor3 = "IconColor" },
+        })
+        SetIcon(icon, "lock-keyhole")
+    end
+    L.Visible = Stat and true or false
+    return L
+end
+
+----------------------------------------------------------------------
+-- Screen / Island / Notifications (module level, usable before window)
+----------------------------------------------------------------------
+local GuiParent = GetGuiParent()
+pcall(function()
+    for _, c in ipairs(GuiParent:GetChildren()) do
+        if c.Name == "VexUI_Screen" then c:Destroy() end
+    end
+end)
+
+local UIScreen = VexUI:Create("ScreenGui", {
+    Name = "VexUI_Screen", ResetOnSpawn = false, IgnoreGuiInset = true,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999,
+})
+UIScreen.Parent = GuiParent
+
+local Island = VexUI:Create("Frame", {
+    Parent = UIScreen, AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, -70),
+    Size = UDim2.new(0, 0, 0, 38), AutomaticSize = AutoX, Visible = false, ZIndex = 100,
+    ThemeID = { BackgroundColor3 = "Background" },
+}, {
+    Corner(19), GStroke({ Alt = true }),
+    Utility:ListLayout("H", 4, Enum.VerticalAlignment.Center, Enum.HorizontalAlignment.Center),
+    Utility:Padding({ left = 5, right = 5 }),
+})
+
+local function ShowIsland(state)
+    if state then
+        Island.Visible = true
+        Utility:TweenObject(Island, { Position = UDim2.new(0.5, 0, 0, 12) }, 0.3, Enum.EasingStyle.Back, DirOut)
+    else
+        Utility:TweenObject(Island, { Position = UDim2.new(0.5, 0, 0, -70) }, 0.25)
+        task.delay(0.3, function()
+            if Island.Position.Y.Offset < -60 then Island.Visible = false end
+        end)
+    end
+end
+
+local NotifWidth = IsMobile and 240 or 280
+local NotifHolder = VexUI:Create("Frame", {
+    Parent = UIScreen, AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 62),
+    Size = UDim2.new(0, NotifWidth, 0, 0), AutomaticSize = AutoY, BackgroundTransparency = 1, ZIndex = 120,
+}, { Utility:ListLayout("V", 8, nil, Enum.HorizontalAlignment.Center) })
+
+local NotifTypes = {
+    Success = { Icon = "circle-check", Color = Color3.fromRGB(52, 211, 120) },
+    Error = { Icon = "circle-x", Color = Color3.fromRGB(255, 80, 90) },
+    Warning = { Icon = "triangle-alert", Color = Color3.fromRGB(255, 190, 60) },
+    Info = { Icon = "info", Color = nil },
+}
+
+function UI:Notification(Config)
+    Config = Config or {}
+    local N = {
+        Title = Config.Title or "Notification", Desc = Config.Desc, Icon = Config.Icon,
+        Duration = Config.Duration or 5, Type = Config.Type,
+    }
+    local typeInfo = N.Type and NotifTypes[N.Type]
+    if typeInfo and not N.Icon then N.Icon = typeInfo.Icon end
+    local accentColor = typeInfo and typeInfo.Color or nil
+
+    -- cap stack
+    local kids = {}
+    for _, c in ipairs(NotifHolder:GetChildren()) do
+        if c:IsA("Frame") then table.insert(kids, c) end
+    end
+    if #kids >= 5 then kids[1]:Destroy() end
+
+    local Wrapper = VexUI:Create("Frame", {
+        Parent = NotifHolder, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AutoY,
+    })
+    local Card = VexUI:Create("Frame", {
+        Parent = Wrapper, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AutoY, ClipsDescendants = true,
+        BackgroundTransparency = 1, Position = UDim2.new(0, 40, 0, 0),
+        ThemeID = { BackgroundColor3 = "SideBar" },
+    }, { Corner(14), GStroke({ Alt = true }) })
+
+    local leftPad = N.Icon and 42 or 14
+    local Inner = VexUI:Create("Frame", {
+        Parent = Card, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AutoY, BackgroundTransparency = 1,
+    }, { Utility:ListLayout("V", 2), Utility:Padding({ top = 10, bottom = 13, left = 0, right = 12 }) })
+
+    CreateText(Inner, N.Title, { TextSize = 13, PaddingLeft = leftPad, LayoutOrder = 1 })
+    if N.Desc and N.Desc ~= "" then
+        CreateText(Inner, N.Desc, { TextSize = 11, PaddingLeft = leftPad, LayoutOrder = 2, TextTransparency = 0.4 })
+    end
+
+    if N.Icon then
+        local icon = VexUI:Create("ImageLabel", {
+            Parent = Card, Position = UDim2.new(0, 12, 0, 10), Size = UDim2.new(0, 20, 0, 20), ZIndex = 3,
+            ImageColor3 = accentColor,
+            ThemeID = (not accentColor) and { ImageColor3 = "Accent" } or nil,
+        })
+        SetIcon(icon, N.Icon)
+    end
+
+    local Bar = VexUI:Create("Frame", {
+        Parent = Card, AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0),
+        Size = UDim2.new(1, 0, 0, 2), ZIndex = 4, BackgroundTransparency = 0.2,
+        BackgroundColor3 = accentColor,
+        ThemeID = (not accentColor) and { BackgroundColor3 = "Accent" } or nil,
+    })
+
+    local Click = VexUI:Create("TextButton", { Parent = Card, Size = UDim2.new(1, 0, 1, 0), ZIndex = 10 })
+
+    local dismissed = false
+    local function Dismiss()
+        if dismissed then return end
+        dismissed = true
+        UI.Notifications = math.max(0, UI.Notifications - 1)
+        if not Wrapper.Parent then return end
+        local h = Wrapper.AbsoluteSize.Y
+        Wrapper.AutomaticSize = AutoNone
+        Wrapper.Size = UDim2.new(1, 0, 0, h)
+        Utility:TweenObject(Card, { Position = UDim2.new(0, 40, 0, 0), BackgroundTransparency = 1 }, 0.2)
+        Utility:TweenObject(Wrapper, { Size = UDim2.new(1, 0, 0, 0) }, 0.25)
+        task.delay(0.3, function() Wrapper:Destroy() end)
+    end
+    Click.Activated:Connect(Dismiss)
+
+    UI.Notifications += 1
+    Utility:TweenObject(Card, { Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0.05 }, 0.3, Enum.EasingStyle.Back, DirOut)
+    Bar.Size = UDim2.new(1, 0, 0, 2)
+    Utility:TweenObject(Bar, { Size = UDim2.new(0, 0, 0, 2) }, N.Duration, Enum.EasingStyle.Linear, DirIn)
+    task.delay(N.Duration, Dismiss)
+
+    return { Dismiss = Dismiss }
+end
+
+----------------------------------------------------------------------
+-- Element builders
+----------------------------------------------------------------------
+local Builders = {}
+
+local function NewCard(ctx, sizeY, opts)
+    opts = opts or {}
+    local children = { Corner(14) }
+    if not opts.NoStroke then table.insert(children, GStroke()) end
+    local Card = VexUI:Create("Frame", {
+        Parent = ctx.Parent, AutomaticSize = AutoY, ClipsDescendants = true,
+        BackgroundTransparency = opts.Transparency or 0.5,
+        Size = UDim2.new(1, 0, 0, sizeY), LayoutOrder = opts.LayoutOrder or 0,
+        BackgroundColor3 = opts.Color,
+        ThemeID = (not opts.Color) and { BackgroundColor3 = "ElementColor" } or nil,
+    }, children)
+    local Inner = VexUI:Create("Frame", {
+        Parent = Card, BackgroundTransparency = 1, AutomaticSize = AutoY,
+        Size = UDim2.new(1, -(opts.Reserve or 0), 0, sizeY),
+    }, {
+        Utility:ListLayout("V", 1, Enum.VerticalAlignment.Center),
+        Utility:Padding({ top = 9, bottom = 9 }),
+    })
+    return Card, Inner
+end
+
+local function HoverEffect(trigger, card, base, hover)
+    trigger.MouseEnter:Connect(function()
+        Utility:TweenObject(card, { BackgroundTransparency = hover }, 0.12)
+    end)
+    trigger.MouseLeave:Connect(function()
+        Utility:TweenObject(card, { BackgroundTransparency = base }, 0.12)
+    end)
+end
+
+local function FinishElement(ctx, el, Card, entry, Title, Desc)
+    el.Root = Card
+    function el:SetTitle(t)
+        if Title then Title.SetText(t) end
+        el.Title = t
+        entry.Title = t
+    end
+    function el:SetDesc(t)
+        if Desc then
+            Desc.SetVisible(t ~= nil and t ~= "")
+            Desc.SetText(t or "")
+        end
+        el.Desc = t
+        entry.Desc = t
+    end
+    function el:Close()
+        for i, e in ipairs(ctx.Window.SearchIndex) do
+            if e == entry then table.remove(ctx.Window.SearchIndex, i) break end
+        end
+        if el._Cleanup then el._Cleanup() end
+        Card:Destroy()
+    end
+    function el:Lock()
+        el.Locked = true
+        LockedElm(Card, true)
+    end
+    function el:UnLock()
+        el.Locked = false
+        LockedElm(Card, false)
+    end
+    if el.Locked then el:Lock() end
+end
+
+-- BUTTON ---------------------------------------------------------------
+Builders.Button = function(ctx, Config)
+    local Button = {
+        Title = Config.Title or "Button", Desc = Config.Desc, Icon = Config.Icon or "mouse-pointer-click",
+        Locked = Config.Locked, SizeY = Config.SizeY or DefaultH, Color = ResolveColor(Config.Color),
+        Callback = Config.Callback or function() end,
+    }
+    local colored = Button.Color ~= nil
+    local base = colored and 0.15 or 0.5
+    local Card, Inner = NewCard(ctx, Button.SizeY, {
+        Reserve = 44, Color = Button.Color, NoStroke = colored, Transparency = base,
+    })
+    local Title, Desc = Utility:ElText(Inner, Button.Title, Button.Desc, {
+        Static = colored, TextColor3 = colored and Contrast(Button.Color) or nil,
+    })
+
+    local Icon = VexUI:Create("ImageLabel", {
+        Parent = Card, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
+        Size = UDim2.new(0, 20, 0, 20), ScaleType = Enum.ScaleType.Fit,
+        ImageColor3 = colored and Contrast(Button.Color) or nil,
+        ThemeID = (not colored) and { ImageColor3 = "IconColor" } or nil,
+    })
+    SetIcon(Icon, Button.Icon)
+
+    local TRG = VexUI:Create("TextButton", { Parent = Card, Size = UDim2.new(1, 0, 1, 0), ZIndex = 5 })
+    HoverEffect(TRG, Card, base, colored and 0.05 or 0.35)
+
+    TRG.Activated:Connect(function()
+        if Button.Locked then return end
+        Safe(Button.Callback)
+        Utility:TweenObject(Card, { BackgroundTransparency = colored and 0 or 0.1 }, 0.08)
+        Utility:TweenObject(Icon, { Size = UDim2.new(0, 16, 0, 16) }, 0.08)
+        task.delay(0.1, function()
+            Utility:TweenObject(Card, { BackgroundTransparency = base }, 0.2)
+            Utility:TweenObject(Icon, { Size = UDim2.new(0, 20, 0, 20) }, 0.2, Enum.EasingStyle.Back, DirOut)
+        end)
+    end)
+
+    function Button:Fire() Safe(Button.Callback) end
+    function Button:SetCallback(fn) Button.Callback = fn or function() end end
+
+    local entry = ctx:Register({ Title = Button.Title, Desc = Button.Desc, Icon = "mouse-pointer-click", Type = "Button", Frame = Card })
+    FinishElement(ctx, Button, Card, entry, Title, Desc)
+    return Button
+end
+
+-- TOGGLE ---------------------------------------------------------------
+Builders.Toggle = function(ctx, Config)
+    local Togglee = {
+        Title = Config.Title or "Toggle", Desc = Config.Desc, Icon = Config.Icon, Default = Config.Default,
+        Value = Config.Value, SizeY = Config.SizeY or DefaultH, Locked = Config.Locked,
+        Callback = Config.Callback or function() end,
+    }
+
+    if Togglee.Value then
+        -- Segmented selector mode
+        local Card = VexUI:Create("Frame", {
+            Parent = ctx.Parent, Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, ClipsDescendants = true,
+        })
+        local Holder = VexUI:Create("Frame", {
+            Parent = Card, Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 0.5,
+            ThemeID = { BackgroundColor3 = "ElementColor" },
+        }, { Corner(14), GStroke() })
+        local count = math.max(#Togglee.Value, 1)
+        local SegW = 1 / count
+        local Pill = VexUI:Create("Frame", {
+            Parent = Holder, Size = UDim2.new(SegW, -6, 1, -6), Position = UDim2.new(0, 3, 0, 3),
+            BackgroundTransparency = 0.45, ThemeID = { BackgroundColor3 = "Accent" },
+        }, { Corner(11) })
+        local Buttons = {}
+        local current = 1
+
+        local function ResolveIndex()
+            local d = Togglee.Default
+            if d == nil then return 1 end
+            if typeof(d) == "number" then return math.clamp(d, 1, count) end
+            for i, v in ipairs(Togglee.Value) do if v == d then return i end end
+            return 1
+        end
+
+        function Togglee:SetValue(Value, sil)
+            local index = Value
+            if typeof(index) ~= "number" then
+                for i, v in ipairs(Togglee.Value) do if v == index then index = i break end end
+            end
+            index = math.clamp(typeof(index) == "number" and index or 1, 1, count)
+            current = index
+            Utility:TweenObject(Pill, { Position = UDim2.new(SegW * (index - 1), 3, 0, 3) }, 0.25, QuadOut, DirOut)
+            for i, btn in ipairs(Buttons) do
+                Utility:TweenObject(btn, { TextTransparency = (i == index) and 0 or 0.45 }, 0.2)
+            end
+            if not sil then Safe(Togglee.Callback, Togglee.Value[index], index) end
+            return Togglee
+        end
+        function Togglee:GetValue() return Togglee.Value[current], current end
+
+        for i, valueText in ipairs(Togglee.Value) do
+            local Btn = VexUI:Create("TextButton", {
+                Parent = Holder, Size = UDim2.new(SegW, 0, 1, 0), Position = UDim2.new(SegW * (i - 1), 0, 0, 0),
+                Text = tostring(valueText), TextTransparency = 0.45, TextSize = 12, ZIndex = 5,
+                ThemeID = { TextColor3 = "Text" },
+            })
+            Buttons[i] = Btn
+            Btn.Activated:Connect(function()
+                if Togglee.Locked then return end
+                Togglee:SetValue(i)
+            end)
+        end
+        Togglee:SetValue(ResolveIndex(), true)
+        Safe(Togglee.Callback, Togglee.Value[ResolveIndex()], ResolveIndex())
+
+        local entry = ctx:Register({ Title = Togglee.Title, Desc = Togglee.Desc, Icon = "toggle-left", Type = "Toggle", Frame = Card })
+        FinishElement(ctx, Togglee, Card, entry, nil, nil)
+        return Togglee
+    end
+
+    -- Switch mode
+    local Card, Inner = NewCard(ctx, Togglee.SizeY, { Reserve = 64 })
+    local Title, Desc = Utility:ElText(Inner, Togglee.Title, Togglee.Desc)
+
+    local Track = VexUI:Create("Frame", {
+        Parent = Card, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0.5, 0),
+        Size = UDim2.new(0, 42, 0, 24), BackgroundTransparency = 0.2,
+        ThemeID = { BackgroundColor3 = "Placeholder" },
+    }, { Corner(12), GStroke({ Alt = true }) })
+    local Knob = VexUI:Create("Frame", {
+        Parent = Track, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 12, 0.5, 0),
+        Size = UDim2.new(0, 16, 0, 16), BackgroundColor3 = Color3.fromRGB(245, 245, 245),
+        BackgroundTransparency = 0.25,
+    }, { Corner(8) })
+
+    local TRG = VexUI:Create("TextButton", { Parent = Card, Size = UDim2.new(1, 0, 1, 0), ZIndex = 5 })
+    HoverEffect(TRG, Card, 0.5, 0.38)
+
+    local Val = (Togglee.Default == true)
+    local function Visual(v, animate)
+        local dur = animate and 0.25 or 0
+        Utility:TweenObject(Knob, {
+            Position = UDim2.new(0, v and 30 or 12, 0.5, 0),
+            BackgroundTransparency = v and 0 or 0.25,
+            Size = UDim2.new(0, 16, 0, 16),
+        }, dur, Enum.EasingStyle.Back, DirOut)
+        VexUI:SetThemeKey(Track, "BackgroundColor3", v and "Accent" or "Placeholder")
+        Utility:TweenObject(Track, { BackgroundTransparency = v and 0 or 0.2 }, dur)
+    end
+
+    function Togglee:SetValue(newValue, silent)
+        Val = newValue and true or false
+        Togglee.Default = Val
+        Visual(Val, true)
+        if not silent then Safe(Togglee.Callback, Val) end
+        return Togglee
+    end
+    function Togglee:GetValue() return Val end
+    function Togglee:Toggle() return Togglee:SetValue(not Val) end
+
+    TRG.MouseButton1Down:Connect(function()
+        Utility:TweenObject(Knob, { Size = UDim2.new(0, 20, 0, 14) }, 0.12)
+    end)
+    local function release()
+        Utility:TweenObject(Knob, { Size = UDim2.new(0, 16, 0, 16) }, 0.12)
+    end
+    TRG.MouseButton1Up:Connect(release)
+    TRG.MouseLeave:Connect(release)
+    TRG.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.Touch then release() end end)
+    TRG.Activated:Connect(function()
+        if Togglee.Locked then return end
+        Togglee:SetValue(not Val)
+    end)
+
+    Visual(Val, false)
+    Safe(Togglee.Callback, Val)
+
+    local entry = ctx:Register({ Title = Togglee.Title, Desc = Togglee.Desc, Icon = "toggle-left", Type = "Toggle", Frame = Card })
+    FinishElement(ctx, Togglee, Card, entry, Title, Desc)
+    return Togglee
+end
+
+-- SLIDER ---------------------------------------------------------------
+Builders.Slider = function(ctx, Config)
+    local V = Config.Value or { Min = 0, Max = 100, Default = 50 }
+    local Slider = {
+        Title = Config.Title or "Slider", Desc = Config.Desc, Locked = Config.Locked,
+        Step = Config.Step or 1,
+        Value = { Min = V.Min or 0, Max = V.Max or 100, Default = V.Default or V.Min or 0 },
+        Callback = Config.Callback or function() end,
+        Width = Config.Width or (IsMobile and 120 or 110), SizeY = Config.SizeY or DefaultH,
+    }
+    local Card, Inner = NewCard(ctx, Slider.SizeY, { Reserve = Slider.Width + 90 })
+    local Title, Desc = Utility:ElText(Inner, Slider.Title, Slider.Desc)
+
+    local BoxFrame = VexUI:Create("Frame", {
+        Parent = Card, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
+        Size = UDim2.new(0, 38, 0, 24), BackgroundTransparency = 0.3,
+        ThemeID = { BackgroundColor3 = "Placeholder" },
+    }, { Corner(10), GStroke({ Alt = true }) })
+    local Box = VexUI:Create("TextBox", {
+        Parent = BoxFrame, Size = UDim2.new(1, 0, 1, 0), TextSize = 11, ClearTextOnFocus = false,
+        Text = tostring(Slider.Value.Default), ZIndex = 3, ThemeID = { TextColor3 = "Text" },
+    })
+
+    local TrackH = IsTouch and 10 or 8
+    local Track = VexUI:Create("Frame", {
+        Parent = Card, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -56, 0.5, 0),
+        Size = UDim2.new(0, Slider.Width, 0, TrackH), BackgroundTransparency = 0.1,
+        ThemeID = { BackgroundColor3 = "Placeholder" },
+    }, { Corner(8), GStroke({ Alt = true }) })
+    local Fill = VexUI:Create("Frame", {
+        Parent = Track, Size = UDim2.new(0, 0, 1, 0), ThemeID = { BackgroundColor3 = "Accent" },
+    }, { Corner(8) })
+    local Knob = VexUI:Create("Frame", {
+        Parent = Fill, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+        Size = UDim2.new(0, 14, 0, 14), BackgroundColor3 = Color3.fromRGB(250, 250, 250), ZIndex = 3,
+    }, { Corner(8), VexUI:Create("UIStroke", { Thickness = 1, Transparency = 0.6, Color = Color3.new(0, 0, 0) }) })
+    local Hit = VexUI:Create("TextButton", {
+        Parent = Track, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+        Size = UDim2.new(1, 16, 0, 34), ZIndex = 6,
+    })
+
+    local Value = RoundTo(math.clamp(Slider.Value.Default, Slider.Value.Min, Slider.Value.Max), Slider.Step)
+    local isFocusing = false
+    local function alphaOf(v)
+        local range = Slider.Value.Max - Slider.Value.Min
+        return range == 0 and 0 or (v - Slider.Value.Min) / range
+    end
+    local function visual(v, animate)
+        local a = math.clamp(alphaOf(v), 0, 1)
+        if animate then
+            Utility:TweenObject(Fill, { Size = UDim2.new(a, 0, 1, 0) }, 0.1, Enum.EasingStyle.Linear)
+        else
+            Fill.Size = UDim2.new(a, 0, 1, 0)
+        end
+        Box.Text = tostring(v)
+    end
+    local function commit(v, silent, animate)
+        v = RoundTo(math.clamp(v, Slider.Value.Min, Slider.Value.Max), Slider.Step)
+        visual(v, animate)
+        if v ~= Value then
+            Value = v
+            if not silent then Safe(Slider.Callback, v) end
+        end
+    end
+
+    visual(Value, false)
+    Safe(Slider.Callback, Value)
+
+    Box.Focused:Connect(function() isFocusing = true end)
+    Box.FocusLost:Connect(function()
+        isFocusing = false
+        if Slider.Locked then visual(Value, false) return end
+        local n = tonumber(Box.Text)
+        if n then
+            local old = Value
+            Value = nil
+            commit(n, false, true)
+            if Value == nil then Value = old end
+        else
+            visual(Value, false)
+        end
+    end)
+
+    local moveConn, endConn, activeInput
+    local function stop()
+        if moveConn then moveConn:Disconnect() moveConn = nil end
+        if endConn then endConn:Disconnect() endConn = nil end
+        activeInput = nil
+        ctx.Scroll.ScrollingEnabled = true
+        Utility:TweenObject(Knob, { Size = UDim2.new(0, 14, 0, 14) }, 0.12)
+    end
+    local function fromX(x)
+        local a = math.clamp((x - Track.AbsolutePosition.X) / math.max(Track.AbsoluteSize.X, 1), 0, 1)
+        commit(Slider.Value.Min + a * (Slider.Value.Max - Slider.Value.Min), false, false)
+    end
+
+    Hit.InputBegan:Connect(function(input)
+        if Slider.Locked or isFocusing then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            stop()
+            activeInput = input
+            ctx.Scroll.ScrollingEnabled = false
+            Utility:TweenObject(Knob, { Size = UDim2.new(0, 18, 0, 18) }, 0.12)
+            fromX(input.Position.X)
+            moveConn = UserInputService.InputChanged:Connect(function(i)
+                if i.UserInputType == Enum.UserInputType.MouseMovement or i == activeInput then
+                    fromX(i.Position.X)
+                end
+            end)
+            endConn = UserInputService.InputEnded:Connect(function(i)
+                if i == activeInput
+                    or (i.UserInputType == Enum.UserInputType.MouseButton1 and activeInput and activeInput.UserInputType == Enum.UserInputType.MouseButton1) then
+                    stop()
+                end
+            end)
+        end
+    end)
+
+    function Slider:SetValue(val, silent) commit(val, silent, true) end
+    function Slider:GetValue() return Value end
+    function Slider:SetMax(val) Slider.Value.Max = val visual(Value, false) end
+    function Slider:SetMin(val) Slider.Value.Min = val visual(Value, false) end
+    function Slider:SetStep(val) Slider.Step = val end
+    Slider._Cleanup = stop
+
+    local entry = ctx:Register({ Title = Slider.Title, Desc = Slider.Desc, Icon = "settings-2", Type = "Slider", Frame = Card })
+    FinishElement(ctx, Slider, Card, entry, Title, Desc)
+    return Slider
+end
+
+-- DROPDOWN -------------------------------------------------------------
+Builders.Dropdown = function(ctx, Config)
+    local Dropdown = {
+        Title = Config.Title or "Dropdown", Desc = Config.Desc, Value = Config.Value or "",
+        Locked = Config.Locked, Multi = Config.Multi or false,
+        Option = Config.Option or Config.Values or {}, Options = {},
+        Callback = Config.Callback or function() end, ASpeed = 0.2,
+        SizeY = Config.SizeY or DefaultH,
+    }
+
+    local Holder = VexUI:Create("Frame", {
+        Parent = ctx.Parent, BackgroundTransparency = 1, AutomaticSize = AutoY,
+        Size = UDim2.new(1, 0, 0, Dropdown.SizeY),
+    }, { Utility:ListLayout("V", 0) })
+
+    local hctx = setmetatable({ Parent = Holder }, { __index = ctx })
+    local Header, Inner = NewCard(hctx, Dropdown.SizeY, { Reserve = 140, LayoutOrder = 1 })
+    local Title, Desc = Utility:ElText(Inner, Dropdown.Title, Dropdown.Desc)
+
+    local ValueFrame = VexUI:Create("Frame", {
+        Parent = Header, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -10, 0.5, 0),
+        Size = UDim2.new(0, 124, 0, 26), BackgroundTransparency = 0.3,
+        ThemeID = { BackgroundColor3 = "Placeholder" },
+    }, { Corner(12), GStroke({ Alt = true }) })
+    local Chevron = VexUI:Create("ImageLabel", {
+        Parent = ValueFrame, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -5, 0.5, 0),
+        Size = UDim2.new(0, 16, 0, 16), ZIndex = 11, ThemeID = { ImageColor3 = "IconColor" },
+    })
+    SetIcon(Chevron, "chevron-down")
+    local Box = VexUI:Create("TextBox", {
+        Parent = ValueFrame, Position = UDim2.new(0, 8, 0, 0), Size = UDim2.new(1, -28, 1, 0),
+        TextSize = 11, ClipsDescendants = true, ClearTextOnFocus = true, ZIndex = 10,
+        PlaceholderText = "Select...", TextXAlignment = Left, ThemeID = { TextColor3 = "Text" },
+    })
+    local TRG = VexUI:Create("TextButton", { Parent = Header, Size = UDim2.new(1, 0, 1, 0), ZIndex = 5 })
+    HoverEffect(TRG, Header, 0.5, 0.38)
+
+    local ListHolder = VexUI:Create("Frame", {
+        Parent = Holder, LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), ClipsDescendants = true,
+        BackgroundTransparency = 1,
+    })
+    local Scroll = VexUI:Create("ScrollingFrame", {
+        Parent = ListHolder, Size = UDim2.new(1, 0, 1, 0), AutomaticCanvasSize = AutoY,
+        ScrollingDirection = Enum.ScrollingDirection.Y, ScrollBarThickness = 2,
+        ElasticBehavior = Enum.ElasticBehavior.WhenScrollable,
+        ThemeID = { ScrollBarImageColor3 = "IconColor" },
+    }, { Utility:ListLayout("V", 4), Utility:Padding({ top = 6, bottom = 6, left = 2, right = 4 }) })
+    local ListLayout = Scroll:FindFirstChildOfClass("UIListLayout")
+
+    local Items = {}
+    local DropOpen, isTyping = false, false
+
+    local function listHeight()
+        local visible = 0
+        for _, e in pairs(Items) do if e.Frame.Visible then visible += 1 end end
+        if visible == 0 then return 0 end
+        return math.clamp(Unscale(ListLayout.AbsoluteContentSize.Y) + 12, 0, 170)
+    end
+    local function resize()
+        if DropOpen then
+            Utility:TweenObject(ListHolder, { Size = UDim2.new(1, 0, 0, listHeight()) }, Dropdown.ASpeed, QuadInOut)
+        end
+    end
+    local function openDropdown()
+        if Dropdown.Locked then return end
+        DropOpen = true
+        task.defer(function()
+            Utility:TweenObject(ListHolder, { Size = UDim2.new(1, 0, 0, listHeight()) }, Dropdown.ASpeed, QuadInOut)
+            Utility:TweenObject(Chevron, { Rotation = 180 }, 0.15)
+        end)
+    end
+    local function closeDropdown()
+        DropOpen = false
+        Utility:TweenObject(ListHolder, { Size = UDim2.new(1, 0, 0, 0) }, Dropdown.ASpeed, QuadInOut)
+        Utility:TweenObject(Chevron, { Rotation = 0 }, 0.15)
+    end
+
+    local function displayText()
+        if Dropdown.Multi then return table.concat(Dropdown.Options, ", ") end
+        return tostring(Dropdown.Value or "")
+    end
+
+    local function paint(entry, selected, animate)
+        local d = animate and 0.12 or 0
+        Utility:TweenObject(entry.Fill, { BackgroundTransparency = selected and 0.72 or 1 }, d)
+        Utility:TweenObject(entry.Btn, { TextTransparency = selected and 0 or 0.4 }, d)
+        Utility:TweenObject(entry.Check, { ImageTransparency = selected and 0 or 1 }, d)
+    end
+
+    local function syncVisual(animate)
+        for item, entry in pairs(Items) do
+            local sel
+            if Dropdown.Multi then
+                sel = table.find(Dropdown.Options, item) ~= nil
+            else
+                sel = (Dropdown.Value == item)
+            end
+            paint(entry, sel, animate)
+        end
+        if not isTyping then Box.Text = displayText() end
+    end
+
+    Box.Focused:Connect(function()
+        if Dropdown.Locked then Box:ReleaseFocus() return end
+        isTyping = true
+        openDropdown()
+    end)
+    Box:GetPropertyChangedSignal("Text"):Connect(function()
+        if not isTyping then return end
+        local q = string.lower(Box.Text)
+        for item, entry in pairs(Items) do
+            entry.Frame.Visible = (q == "") or (string.find(string.lower(tostring(item)), q, 1, true) ~= nil)
+        end
+        task.defer(resize)
+    end)
+    Box.FocusLost:Connect(function()
+        isTyping = false
+        for _, entry in pairs(Items) do entry.Frame.Visible = true end
+        Box.Text = displayText()
+        task.defer(resize)
+    end)
+
+    TRG.Activated:Connect(function()
+        if Dropdown.Locked then return end
+        if DropOpen then closeDropdown() else openDropdown() end
+    end)
+
+    function Dropdown:Refresh(options)
+        Dropdown.Option = options or Dropdown.Option
+        for _, c in ipairs(Scroll:GetChildren()) do
+            if c:IsA("Frame") then c:Destroy() end
+        end
+        Items = {}
+        for idx, Item in ipairs(Dropdown.Option) do
+            local Frame = VexUI:Create("Frame", {
+                Parent = Scroll, Name = tostring(Item), LayoutOrder = idx, Size = UDim2.new(1, 0, 0, IsTouch and 30 or 26),
+                BackgroundTransparency = 0.5, ClipsDescendants = true,
+                ThemeID = { BackgroundColor3 = "ElementColor" },
+            }, { Corner(12), GStroke({ Alt = true }) })
+            local Fill = VexUI:Create("Frame", {
+                Parent = Frame, Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+                ThemeID = { BackgroundColor3 = "Accent" },
+            })
+            local Check = VexUI:Create("ImageLabel", {
+                Parent = Frame, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
+                Size = UDim2.new(0, 14, 0, 14), ImageTransparency = 1, ZIndex = 3,
+                ThemeID = { ImageColor3 = "Accent" },
+            })
+            SetIcon(Check, "check")
+            local Btn = VexUI:Create("TextButton", {
+                Parent = Frame, Size = UDim2.new(1, 0, 1, 0), Text = tostring(Item), TextSize = 11,
+                TextTransparency = 0.4, TextXAlignment = Left, ZIndex = 4,
+                ThemeID = { TextColor3 = "Text" },
+            }, { Utility:Padding({ left = 10 }) })
+            local entry = { Frame = Frame, Fill = Fill, Check = Check, Btn = Btn }
+            Items[Item] = entry
+
+            Btn.Activated:Connect(function()
+                if Dropdown.Locked then return end
+                if not Dropdown.Multi then
+                    Dropdown.Value = Item
+                    isTyping = false
+                    Box:ReleaseFocus()
+                    syncVisual(true)
+                    closeDropdown()
+                    Safe(Dropdown.Callback, Item)
+                else
+                    local pos = table.find(Dropdown.Options, Item)
+                    if pos then table.remove(Dropdown.Options, pos) else table.insert(Dropdown.Options, Item) end
+                    syncVisual(true)
+                    Safe(Dropdown.Callback, Dropdown.Options)
+                end
+            end)
+        end
+        syncVisual(false)
+        task.defer(resize)
+        return Dropdown, Items
+    end
+
+    function Dropdown:SetValue(Value, fire)
+        if Dropdown.Multi then
+            Dropdown.Options = {}
+            if type(Value) == "table" then
+                for _, v in ipairs(Value) do table.insert(Dropdown.Options, v) end
+            elseif Value ~= nil and Value ~= "" then
+                table.insert(Dropdown.Options, Value)
+            end
+        else
+            Dropdown.Value = Value
+        end
+        syncVisual(true)
+        if fire then Safe(Dropdown.Callback, Dropdown.Multi and Dropdown.Options or Dropdown.Value) end
+    end
+    function Dropdown:GetValue() return Dropdown.Multi and Dropdown.Options or Dropdown.Value end
+    function Dropdown:Collapse() closeDropdown() end
+    function Dropdown:Expand() openDropdown() end
+
+    -- initial value
+    if Dropdown.Multi then
+        if type(Dropdown.Value) == "table" then
+            for _, v in ipairs(Dropdown.Value) do table.insert(Dropdown.Options, v) end
+        elseif Dropdown.Value ~= "" then
+            table.insert(Dropdown.Options, Dropdown.Value)
+        end
+    end
+    Dropdown:Refresh(Dropdown.Option)
+
+    local entry = ctx:Register({ Title = Dropdown.Title, Desc = Dropdown.Desc, Icon = "list", Type = "Dropdown", Frame = Holder })
+    FinishElement(ctx, Dropdown, Header, entry, Title, Desc)
+    Dropdown.Root = Holder
+    function Dropdown:Close()
+        for i, e in ipairs(ctx.Window.SearchIndex) do
+            if e == entry then table.remove(ctx.Window.SearchIndex, i) break end
+        end
+        Holder:Destroy()
+    end
+    return Dropdown
+end
+
+-- INPUT ----------------------------------------------------------------
+Builders.Input = function(ctx, Config)
+    local Input = {
+        Title = Config.Title or "Input", Desc = Config.Desc, Value = Config.Value or "", Locked = Config.Locked,
+        MaxSymbols = Config.MaxSymbols, Placeholder = Config.Placeholder,
+        Callback = Config.Callback or function() end, SizeY = Config.SizeY or DefaultH,
+    }
+    local Card, Inner = NewCard(ctx, Input.SizeY, { Reserve = 150 })
+    local Title, Desc = Utility:ElText(Inner, Input.Title, Input.Desc)
+
+    local Frame = VexUI:Create("Frame", {
+        Parent = Card, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -10, 0.5, 0),
+        Size = UDim2.new(0, 134, 0, 26), BackgroundTransparency = 0.3,
+        ThemeID = { BackgroundColor3 = "Placeholder" },
+    }, { Corner(12), GStroke({ Alt = true }) })
+    local Stroke = Frame:FindFirstChildOfClass("UIStroke")
+
+    local Box = VexUI:Create("TextBox", {
+        Parent = Frame, Position = UDim2.new(0, 0, 0, 0), Size = UDim2.new(1, Input.MaxSymbols and -38 or -8, 1, 0),
+        Text = Input.Value, PlaceholderText = Input.Placeholder or "...", ClearTextOnFocus = false,
+        ClipsDescendants = true, TextSize = 11, ZIndex = 5, TextXAlignment = Left,
+        ThemeID = { TextColor3 = "Text" },
+    }, { Utility:Padding({ left = 9, right = 4 }) })
+
+    local MaxLabel
+    if Input.MaxSymbols then
+        MaxLabel = VexUI:Create("TextLabel", {
+            Parent = Frame, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0),
+            Size = UDim2.new(0, 30, 0, 16), Text = #Input.Value .. "/" .. Input.MaxSymbols, TextSize = 9,
+            TextTransparency = 0.5, ThemeID = { TextColor3 = "Text" },
+        })
+        Box:GetPropertyChangedSignal("Text"):Connect(function()
+            if #Box.Text > Input.MaxSymbols then Box.Text = string.sub(Box.Text, 1, Input.MaxSymbols) end
+            MaxLabel.Text = #Box.Text .. "/" .. Input.MaxSymbols
+        end)
+    end
+
+    Box.Focused:Connect(function()
+        if Input.Locked then Box:ReleaseFocus() return end
+        VexUI:SetThemeKey(Stroke, "Color", "Accent")
+    end)
+    Box.FocusLost:Connect(function(enter)
+        VexUI:SetThemeKey(Stroke, "Color", "Outline")
+        if Input.Locked or not enter then return end
+        Input.Value = Box.Text
+        Safe(Input.Callback, Box.Text)
+    end)
+
+    function Input:SetValue(Val)
+        Box.Text = tostring(Val)
+        Input.Value = Box.Text
+        Safe(Input.Callback, Box.Text)
+    end
+    function Input:GetValue() return Box.Text end
+    function Input:SetMaxSymbols(n)
+        Input.MaxSymbols = n
+        if MaxLabel then MaxLabel.Text = #Box.Text .. "/" .. n end
+    end
+    function Input:SetPlaceholder(t) Box.PlaceholderText = t end
+
+    if not Input.Locked then Safe(Input.Callback, Input.Value) end
+
+    local entry = ctx:Register({ Title = Input.Title, Desc = Input.Desc, Icon = "text-cursor-input", Type = "Input", Frame = Card })
+    FinishElement(ctx, Input, Card, entry, Title, Desc)
+    return Input
+end
+
+-- KEYBIND --------------------------------------------------------------
+Builders.Keybind = function(ctx, Config)
+    local Keybind = {
+        Title = Config.Title or "Keybind", Desc = Config.Desc, Value = Config.Value or "F", Locked = Config.Locked,
+        Callback = Config.Callback or function() end, OnPress = Config.OnPress, SizeY = Config.SizeY or DefaultH,
+    }
+    local Card, Inner = NewCard(ctx, Keybind.SizeY, { Reserve = 90 })
+    local Title, Desc = Utility:ElText(Inner, Keybind.Title, Keybind.Desc)
+
+    local KeyBtn = VexUI:Create("TextButton", {
+        Parent = Card, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
+        Size = UDim2.new(0, 30, 0, 24), AutomaticSize = AutoX, TextSize = 11, Text = Keybind.Value,
+        BackgroundTransparency = 0.2, ZIndex = 6,
+        ThemeID = { BackgroundColor3 = "Placeholder", TextColor3 = "Text" },
+    }, { Corner(8), GStroke({ Alt = true }), Utility:Padding({ left = 9, right = 9 }) })
+
+    local listening, conn = false, nil
+    KeyBtn.Activated:Connect(function()
+        if Keybind.Locked or listening then return end
+        listening = true
+        KeyBtn.Text = "..."
+        conn = UserInputService.InputBegan:Connect(function(input)
+            if input.KeyCode ~= Enum.KeyCode.Unknown then
+                conn:Disconnect()
+                listening = false
+                local name = input.KeyCode == Enum.KeyCode.Escape and Keybind.Value or input.KeyCode.Name
+                KeyBtn.Text = name
+                Keybind.Value = name
+                Safe(Keybind.Callback, name)
+            end
+        end)
+    end)
+
+    local pressConn
+    if Keybind.OnPress then
+        pressConn = ctx.Window:_Connect(UserInputService.InputBegan, function(input, gp)
+            if gp or listening or Keybind.Locked then return end
+            if input.KeyCode.Name == Keybind.Value then Safe(Keybind.OnPress) end
+        end)
+    end
+
+    function Keybind:SetValue(Val)
+        KeyBtn.Text = Val
+        Keybind.Value = Val
+        Safe(Keybind.Callback, Val)
+    end
+    function Keybind:GetValue() return Keybind.Value end
+    Keybind._Cleanup = function()
+        if conn then conn:Disconnect() end
+        if pressConn then pressConn:Disconnect() end
+    end
+
+    Safe(Keybind.Callback, Keybind.Value)
+    local entry = ctx:Register({ Title = Keybind.Title, Desc = Keybind.Desc, Icon = "keyboard", Type = "Keybind", Frame = Card })
+    FinishElement(ctx, Keybind, Card, entry, Title, Desc)
+    return Keybind
+end
+
+-- PARAGRAPH ------------------------------------------------------------
+Builders.Paragraph = function(ctx, Config)
+    local Paragraph = {
+        Title = Config.Title or "Paragraph", Desc = Config.Desc, Icon = Config.Icon, IconSize = Config.IconSize or 22,
+        Color = ResolveColor(Config.Color), Thumbnail = Config.Thumbnail, ThumbnailPos = Config.ThumbnailPos or "Up",
+        ScaleType = Config.ScaleType or "Crop", ThumbnailSize = Config.ThumbnailSize or 100,
+    }
+    local colored = Paragraph.Color ~= nil
+    local Card, Inner = NewCard(ctx, 40, { Color = Paragraph.Color, NoStroke = colored, Transparency = colored and 0.2 or 0.5 })
+    Inner.UIListLayout.Padding = UDim.new(0, 4)
+    local txtColor = colored and Contrast(Paragraph.Color) or nil
+
+    local Thumb
+    if Paragraph.Thumbnail then
+        Thumb = VexUI:Create("ImageLabel", {
+            Parent = Inner, Image = Paragraph.Thumbnail, Size = UDim2.new(1, -16, 0, Paragraph.ThumbnailSize),
+            ScaleType = Enum.ScaleType[Paragraph.ScaleType] or Enum.ScaleType.Crop,
+            LayoutOrder = (Paragraph.ThumbnailPos == "Up") and 1 or 3,
+        }, { Corner(12), Utility:Padding(0) })
+        Thumb.Position = UDim2.new(0, 8, 0, 0)
+    end
+
+    local TextFrame = VexUI:Create("Frame", {
+        Parent = Inner, BackgroundTransparency = 1, AutomaticSize = AutoY, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = 2,
+    }, { Utility:ListLayout("V", 1, Enum.VerticalAlignment.Center) })
+    local Title, Desc = Utility:ElText(TextFrame, Paragraph.Title, Paragraph.Desc, { Static = colored, TextColor3 = txtColor })
+
+    if Paragraph.Icon then
+        local Icon = VexUI:Create("ImageLabel", {
+            Parent = TextFrame, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 10, 0.5, 0),
+            Size = UDim2.new(0, Paragraph.IconSize, 0, Paragraph.IconSize), ZIndex = 3,
+            ImageColor3 = txtColor, ThemeID = (not colored) and { ImageColor3 = "IconColor" } or nil,
+        })
+        SetIcon(Icon, Paragraph.Icon)
+        Title.UIPadding.PaddingLeft = UDim.new(0, Paragraph.IconSize + 20)
+        Desc.UIPadding.PaddingLeft = UDim.new(0, Paragraph.IconSize + 20)
+    end
+
+    function Paragraph:SetThumbnail(v) if Thumb then Thumb.Image = v else warn("Thumbnail Not Found In Paragraph!") end end
+    function Paragraph:SetPos(v) if Thumb then Thumb.LayoutOrder = (v == "Up") and 1 or 3 else warn("Thumbnail Not Found In Paragraph!") end end
+    function Paragraph:SetThumbnailSize(v) if Thumb then Thumb.Size = UDim2.new(1, -16, 0, v) else warn("Thumbnail Not Found In Paragraph!") end end
+
+    local entry = ctx:Register({ Title = Paragraph.Title, Desc = Paragraph.Desc, Icon = Paragraph.Icon or "text", Type = "Paragraph", Frame = Card })
+    FinishElement(ctx, Paragraph, Card, entry, Title, Desc)
+    return Paragraph
+end
+
+-- DIVIDER / SPACE ------------------------------------------------------
+Builders.Devider = function(ctx)
+    local f = VexUI:Create("Frame", {
+        Parent = ctx.Parent, Size = UDim2.new(1, 0, 0, 1), ThemeID = { BackgroundColor3 = "Outline" },
+    }, { Corner(100) })
+    if ctx.OnAdd then ctx.OnAdd(f) end
+    return f
+end
+Builders.Divider = Builders.Devider
+
+Builders.Space = function(ctx, Value)
+    local f = VexUI:Create("Frame", {
+        Parent = ctx.Parent, BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, type(Value) == "number" and Value or 4),
+    })
+    return f
+end
+
+----------------------------------------------------------------------
+-- Method attach (used by Tab, Section, Group)
+----------------------------------------------------------------------
+local function AttachElementMethods(obj, ctx)
+    for name, builder in pairs(Builders) do
+        obj[name] = function(_, cfg)
+            return builder(ctx, cfg or {})
+        end
+    end
+end
+
+-- SECTION (inside tab) -------------------------------------------------
+Builders.Section = function(ctx, Config)
+    Config = Config or {}
+    local Section = {
+        Title = Config.Title or "Section", Icon = Config.Icon, TextSize = Config.TextSize or 16,
+        Default = (Config.Default == nil) and true or Config.Default, Border = Config.Border or false,
+        UIPadding = Config.UIPadding or UDim.new(0, 0), Open = true,
+    }
+   local Root = VexUI:Create("Frame", {
+        Parent = ctx.Parent, BackgroundTransparency = 1, AutomaticSize = AutoY, Size = UDim2.new(1, 0, 0, 28),
+    }, { Utility:ListLayout("V", 4) })
+
+    local Header = VexUI:Create("TextButton", { Parent = Root, Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 1 })
+    local Label = VexUI:Create("TextLabel", {
+        Parent = Header, Size = UDim2.new(1, 0, 1, 0), Text = Section.Title, RichText = true, TextSize = Section.TextSize,
+        TextXAlignment = Left, ThemeID = { TextColor3 = "Section.Text|Text" },
+    }, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, 4) }) })
+
+    if Section.Icon then
+        Label.UIPadding.PaddingLeft = Section.UIPadding + UDim.new(0, 28)
+        local Icon = VexUI:Create("ImageLabel", {
+            Parent = Header, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 4, 0.5, 0),
+            Size = UDim2.new(0, 20, 0, 20), ThemeID = { ImageColor3 = "Section.Icon|IconColor" },
+        })
+        SetIcon(Icon, Section.Icon)
+    end
+
+    local Arrow = VexUI:Create("ImageLabel", {
+        Parent = Header, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0),
+        Size = UDim2.new(0, 16, 0, 16), Visible = false, Rotation = 180,
+        ThemeID = { ImageColor3 = "Section.Icon|IconColor" },
+    })
+    SetIcon(Arrow, "chevron-down")
+
+    local Container = VexUI:Create("Frame", {
+        Parent = Root, LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AutoY, ClipsDescendants = true,
+        BackgroundTransparency = Section.Border and 0.7 or 1, ThemeID = { BackgroundColor3 = "ElementColor" },
+    }, {
+        Corner(14), Utility:ListLayout("V", 5), Utility:Padding({ top = 4, bottom = 4, left = 3, right = 3 }),
+        GStroke({ Alt = true }),
+    })
+    local CStroke = Container:FindFirstChildOfClass("UIStroke")
+    CStroke.Transparency = Section.Border and 0 or 1
+    local Layout = Container:FindFirstChildOfClass("UIListLayout")
+
+    local token, elements = 0, 0
+    local function setOpen(open, instant)
+        Section.Open = open
+        token += 1
+        local my = token
+        Utility:TweenObject(Arrow, { Rotation = open and 180 or 0 }, 0.25)
+        if open then
+            if instant then
+                Container.AutomaticSize = AutoY
+                Container.Size = UDim2.new(1, 0, 0, 0)
+                return
+            end
+            local target = Unscale(Layout.AbsoluteContentSize.Y) + 8
+            Container.AutomaticSize = AutoNone
+            Utility:TweenObject(Container, { Size = UDim2.new(1, 0, 0, target) }, 0.25)
+            task.delay(0.28, function()
+                if token == my and Section.Open then
+                    Container.AutomaticSize = AutoY
+                    Container.Size = UDim2.new(1, 0, 0, 0)
+                end
+            end)
+        else
+            local cur = Unscale(Container.AbsoluteSize.Y)
+            Container.Size = UDim2.new(1, 0, 0, cur)
+            Container.AutomaticSize = AutoNone
+            if instant then
+                Container.Size = UDim2.new(1, 0, 0, 0)
+            else
+                Utility:TweenObject(Container, { Size = UDim2.new(1, 0, 0, 0) }, 0.25)
+            end
+        end
+    end
+
+    Header.Activated:Connect(function()
+        if elements == 0 then return end
+        setOpen(not Section.Open)
+    end)
+
+    local sctx = setmetatable({
+        Parent = Container,
+        OnAdd = function()
+            elements += 1
+            if elements == 1 then
+                Arrow.Visible = true
+                if not Section.Default then setOpen(false, true) end
+            end
+        end,
+    }, { __index = ctx })
+    AttachElementMethods(Section, sctx)
+
+    local ElementToggle = Section.Toggle
+    Section.Toggle = function(self, a)
+        if type(a) == "table" then return ElementToggle(self, a) end
+        if a == nil then a = not Section.Open end
+        if elements == 0 then return end
+        setOpen(a and true or false)
+    end
+    function Section:Close() Root:Destroy() end
+    function Section:SetTitle(v) Label.Text = v end
+    function Section:SetTextSize(v) Label.TextSize = v end
+
+    if not Section.Default then setOpen(false, true) end
+    return Section
+end
+
+-- GROUP ---------------------------------------------------------------
+Builders.Group = function(ctx, Config)
+    Config = Config or {}
+    local Padding = Config.Padding or 5
+    local GroupFrame = VexUI:Create("Frame", {
+        Parent = ctx.Parent, BackgroundTransparency = 1, AutomaticSize = AutoY, Size = UDim2.new(1, 0, 0, 0),
+    }, {
+        VexUI:Create("UIListLayout", {
+            FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Left,
+            VerticalAlignment = Enum.VerticalAlignment.Top, SortOrder = Enum.SortOrder.LayoutOrder,
+            Padding = UDim.new(0, Padding),
+        }),
+    })
+
+    local function Resize()
+        local kids = {}
+        for _, c in ipairs(GroupFrame:GetChildren()) do
+            if c:IsA("Frame") then table.insert(kids, c) end
+        end
+        local n = math.max(1, #kids)
+        local off = -(Padding * (n - 1) / n)
+        for _, c in ipairs(kids) do
+            c.Size = UDim2.new(1 / n, off, 0, c.Size.Y.Offset)
+        end
+    end
+
+    local Group = { Root = GroupFrame }
+    local gctx = setmetatable({ Parent = GroupFrame, OnAdd = Resize }, { __index = ctx })
+    AttachElementMethods(Group, gctx)
+    function Group:Close() GroupFrame:Destroy() end
+    return Group
+end
+
+----------------------------------------------------------------------
+-- Draggable helper (topbar only)
+----------------------------------------------------------------------
+local function EnableDragging(handle, target)
+    local dragging, dragInput, dragStart, startPos = false, nil, nil, nil
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = target.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    handle.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    return UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local d = input.Position - dragStart
+            target.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+end
+
+----------------------------------------------------------------------
+-- WINDOW
+----------------------------------------------------------------------
+function UI:CreateWindow(Config)
+    Config = Config or {}
+    local reqSize = Config.Size
+    local MIN_W, MAX_W, MIN_H, MAX_H = 360, 900, 260, 700
+    local wx = reqSize and reqSize.X.Offset or 480
+    local wy = reqSize and reqSize.Y.Offset or 360
+
+    local Window = {
+        Name = Config.Name or "VexUI", Author = Config.Author, Icon = Config.Icon,
+        ToggleKey = Config.ToggleKey or Enum.KeyCode.F,
+        Transparent = Config.Transparent or false,
+        Theme = Config.Theme or "Dark", Folder = Config.Folder, KeySystem = Config.KeySystem,
+        Default = "Default",
+        AutoScale = (Config.AutoScale == nil) and true or Config.AutoScale,
+        Resizable = (Config.Resizable == nil) and true or Config.Resizable,
+        Topbar = { Height = Config.Height or 36 },
+        Themes = VexUI.Themes,
+        Size = UDim2.new(0, math.clamp(wx, MIN_W, MAX_W), 0, math.clamp(wy, MIN_H, MAX_H)),
+        SideBarWidth = Config.SideBarWidth or (IsMobile and 150 or 160),
+        TransparencyNum = Config.TransparencyNum or (Config.Transparent and 0.25 or 0),
+        User = Config.User or {},
+        Tabs = {}, TabList = {}, TabOrder = {}, SearchIndex = {}, AllElements = {}, CurrentTab = {},
+        IslandOpen = true, _Connections = {}, _OnDestroy = Config.OnDestroy or function() end,
+        _ManualScale = false,
+    }
+    if type(Window.ToggleKey) == "string" then
+        Window.ToggleKey = Enum.KeyCode[Window.ToggleKey] or Enum.KeyCode.F
+    end
+    table.insert(UI.Windows, Window)
+    UI.Window = Window
+
+    function Window:_Connect(signal, fn)
+        local c = signal:Connect(fn)
+        table.insert(Window._Connections, c)
+        return c
+    end
+
+    function Window:SetTheme(themeName)
+        if VexUI:SetTheme(themeName) then Window.Theme = themeName end
+    end
+    VexUI:SetTheme(Window.Theme)
+
+    local TH = Window.Topbar.Height
+    local F3W = 190
+
+    -- Key system -------------------------------------------------------
+    if Window.KeySystem and Window.KeySystem.KeyValidator then
+        local KS = Window.KeySystem
+        local folder = "VexUI/" .. (Window.Folder or "Temp")
+        local keyPath = folder .. "/key.json"
+        local saved
+        pcall(function()
+            if not isfolder("VexUI") then makefolder("VexUI") end
+            if not isfolder(folder) then makefolder(folder) end
+            if isfile(keyPath) then saved = HttpService:JSONDecode(readfile(keyPath)).key end
+        end)
+
+        local autoOk = false
+        if saved and saved ~= "" then
+            local ok, res = pcall(KS.KeyValidator, saved)
+            autoOk = ok and res == true
+        end
+
+        if not autoOk then
+            local done = Instance.new("BindableEvent")
+            local KeyPanel = VexUI:Create("Frame", {
+                Parent = UIScreen, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+                Size = UDim2.new(0, 270, 0, 156), Active = true, ThemeID = { BackgroundColor3 = "Background" },
+            }, {
+                Corner(18), GStroke({ Thickness = 1 }),
+                VexUI:Create("UIScale", { Scale = IsMobile and 0.9 or 1 }),
+            })
+            CreateText(KeyPanel, KS.Title or "Key System", {
+                Position = UDim2.new(0, 0, 0, 12), Size = UDim2.new(1, -50, 0, 0), TextSize = 14, PaddingLeft = 16, ZIndex = 2,
+            })
+            CreateText(KeyPanel, KS.Desc or "Enter your key to continue", {
+                Position = UDim2.new(0, 0, 0, 36), Size = UDim2.new(1, 0, 0, 0), TextSize = 11, PaddingLeft = 16,
+                PaddingRight = 16, TextTransparency = 0.45, ZIndex = 2,
+            })
+            local Cross = VexUI:Create("ImageButton", {
+                Parent = KeyPanel, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 10),
+                Size = UDim2.new(0, 22, 0, 22), ThemeID = { ImageColor3 = "IconColor" }, ZIndex = 3,
+            })
+            SetIcon(Cross, "x")
+            Cross.Activated:Connect(function() UIScreen:Destroy() end)
+
+            local BoxFrame = VexUI:Create("Frame", {
+                Parent = KeyPanel, Position = UDim2.new(0, 16, 0, 78), Size = UDim2.new(1, -32, 0, 32),
+                BackgroundTransparency = 0.2, ThemeID = { BackgroundColor3 = "SideBar" },
+            }, { Corner(12), GStroke({ Alt = true }) })
+            local KeyBox = VexUI:Create("TextBox", {
+                Parent = BoxFrame, Size = UDim2.new(1, 0, 1, 0), Text = saved or "", PlaceholderText = "Key . . .",
+                ClearTextOnFocus = false, TextSize = 12, TextXAlignment = Left, ZIndex = 3,
+                ThemeID = { TextColor3 = "Text" },
+            }, { Utility:Padding({ left = 12, right = 8 }) })
+
+            local function mkBtn(text, x, w, key)
+                local b = VexUI:Create("TextButton", {
+                    Parent = KeyPanel, Position = UDim2.new(x, x == 0 and 16 or 4, 0, 118), Size = UDim2.new(w, -20, 0, 28),
+                    Text = text, TextSize = 12, BackgroundTransparency = 0.1, ZIndex = 3,
+                    ThemeID = { BackgroundColor3 = key, TextColor3 = "Text" },
+                }, { Corner(12) })
+                return b
+            end
+            local Apply = mkBtn("Apply", 0, 0.55, "Accent")
+            local Get = mkBtn("Get Key", 0.55, 0.45, "ElementColor")
+
+            Apply.Activated:Connect(function()
+                local inputKey = KeyBox.Text:gsub("%s+", "")
+                if inputKey == "" then return end
+                Apply.Text = "..."
+                local ok, res = pcall(KS.KeyValidator, inputKey)
+                if ok and res == true then
+                    pcall(function() writefile(keyPath, HttpService:JSONEncode({ key = inputKey })) end)
+                    Apply.Text = "Success"
+                    task.wait(0.4)
+                    KeyPanel:Destroy()
+                    done:Fire()
+                else
+                    Apply.Text = "Invalid"
+                    task.wait(1)
+                    Apply.Text = "Apply"
+                end
+            end)
+            Get.Activated:Connect(function()
+                pcall(function() setclipboard(KS.URL or "") end)
+                Get.Text = "Copied!"
+                task.wait(1)
+                Get.Text = "Get Key"
+            end)
+            done.Event:Wait()
+            done:Destroy()
+        end
+    end
+
+    -- Main -------------------------------------------------------------
+    local Main = VexUI:Create("Frame", {
+        Name = Window.Name, Parent = UIScreen, Size = Window.Size, AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.5, 0), ClipsDescendants = true, Active = true,
+        BackgroundTransparency = Window.TransparencyNum, ThemeID = { BackgroundColor3 = "Background" },
+    }, {
+        Corner(18), GStroke({ Thickness = 1, Alt = true }), VexUI:Create("UIScale", { Scale = 1 }),
+    })
+    local MainScale = Main:FindFirstChildOfClass("UIScale")
+
+    local Surfaces = { { Main, 0 } }
+    local function ApplySurfaces()
+        local t = Window.TransparencyNum
+        for _, s in ipairs(Surfaces) do
+            s[1].BackgroundTransparency = math.clamp(s[2] + t * (1 - s[2]), 0, 1)
+        end
+    end
+
+    local function Panel(parent, name, base, radius)
+        local f = VexUI:Create("Frame", {
+            Name = name, Parent = parent, BackgroundTransparency = base, ThemeID = { BackgroundColor3 = "SideBar" },
+        }, { Corner(radius or 16), GStroke({ Alt = true }) })
+        table.insert(Surfaces, { f, base })
+        return f
+    end
+
+    local TopBar = VexUI:Create("Frame", {
+        Parent = Main, Position = UDim2.new(0, 8, 0, 8), Size = UDim2.new(1, -16, 0, TH),
+        BackgroundTransparency = 1, ZIndex = 10,
+    })
+
+    -- F1 title
+    local TopBarF1 = Panel(TopBar, "Title", 0.1, 16)
+    TopBarF1.Position = UDim2.new(0, 0, 0, 0)
+
+    local LibName = VexUI:Create("TextLabel", {
+        Parent = TopBarF1, Size = UDim2.new(1, 0, 1, 0), RichText = true, Text = Window.Name, TextSize = 13,
+        TextXAlignment = Left,
+        TextYAlignment = Window.Author and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center,
+        TextTruncate = Enum.TextTruncate.AtEnd, ThemeID = { TextColor3 = "Text" },
+    }, {
+        VexUI:Create("UIPadding", {
+            PaddingLeft = UDim.new(0, Window.Icon and 44 or 14),
+            PaddingTop = UDim.new(0, Window.Author and 5 or 0),
+            PaddingRight = UDim.new(0, 6),
+        }),
+    })
+    local LibAuthor = VexUI:Create("TextLabel", {
+        Parent = TopBarF1, Size = UDim2.new(1, 0, 1, 0), RichText = true, Text = Window.Author or "", TextSize = 11,
+        TextTransparency = 0.5, TextXAlignment = Left, Visible = Window.Author ~= nil,
+        TextTruncate = Enum.TextTruncate.AtEnd, ThemeID = { TextColor3 = "Text" },
+    }, {
+        VexUI:Create("UIPadding", {
+            PaddingLeft = UDim.new(0, Window.Icon and 44 or 14), PaddingTop = UDim.new(0, 18), PaddingRight = UDim.new(0, 6),
+        }),
+    })
+    if Window.Icon then
+        local TitleIcon = VexUI:Create("ImageLabel", {
+            Parent = TopBarF1, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0.5, 0),
+            Size = UDim2.new(0, 24, 0, 24), ThemeID = { ImageColor3 = "IconColor" },
+        })
+        SetIcon(TitleIcon, Window.Icon)
+    end
+
+    -- F2 topbar buttons
+    local TopBarF2 = Panel(TopBar, "Buttons", 0.1, 16)
+    TopBarF2.AnchorPoint = Vector2.new(1, 0)
+    TopBarF2.Size = UDim2.new(0, 0, 1, 0)
+    TopBarF2.Visible = false
+    TopBarF2.ClipsDescendants = false
+    VexUI:Create("UIListLayout", {
+        Parent = TopBarF2, FillDirection = Enum.FillDirection.Horizontal, SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 4), VerticalAlignment = Enum.VerticalAlignment.Center,
+        HorizontalAlignment = Enum.HorizontalAlignment.Center,
+    })
+
+    -- F3 search + controls
+    local TopBarF3 = Panel(TopBar, "Tools", 0.1, 16)
+    TopBarF3.AnchorPoint = Vector2.new(1, 0)
+    TopBarF3.Position = UDim2.new(1, 0, 0, 0)
+    TopBarF3.Size = UDim2.new(0, F3W, 1, 0)
+
+    local SearchPill = VexUI:Create("Frame", {
+        Parent = TopBarF3, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 6, 0.5, 0),
+        Size = UDim2.new(0, 120, 0, 26), ThemeID = { BackgroundColor3 = "Search.Background|Background" },
+    }, { Corner(13), GStroke({ Alt = true }) })
+    local PillStroke = SearchPill:FindFirstChildOfClass("UIStroke")
+    local SearchIcon = VexUI:Create("ImageLabel", {
+        Parent = SearchPill, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0.5, 0),
+        Size = UDim2.new(0, 14, 0, 14), ThemeID = { ImageColor3 = "IconColor" },
+    })
+    SetIcon(SearchIcon, "search")
+    local SearchBox = VexUI:Create("TextBox", {
+        Parent = SearchPill, Position = UDim2.new(0, 26, 0, 0), Size = UDim2.new(1, -30, 1, 0), TextSize = 11,
+        ClearTextOnFocus = true, PlaceholderText = "Search . . .", Text = "", TextXAlignment = Left,
+        ClipsDescendants = true, ZIndex = 3, ThemeID = { TextColor3 = "Search.Text|Text" },
+    })
+
+    local Controls = VexUI:Create("Frame", {
+        Parent = TopBarF3, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
+        Size = UDim2.new(0, 54, 0, 26), BackgroundTransparency = 1,
+    }, { Utility:ListLayout("H", 4, Enum.VerticalAlignment.Center, Enum.HorizontalAlignment.Right) })
+    local MinBtn = VexUI:Create("ImageButton", {
+        Parent = Controls, LayoutOrder = 1, Size = UDim2.new(0, 24, 0, 24), ThemeID = { ImageColor3 = "IconColor" },
+    })
+    SetIcon(MinBtn, "minus")
+    local CloseBtn = VexUI:Create("ImageButton", {
+        Parent = Controls, LayoutOrder = 2, Size = UDim2.new(0, 24, 0, 24), ThemeID = { ImageColor3 = "IconColor" },
+    })
+    SetIcon(CloseBtn, "x")
+
+    local TopBtnCount = 0
+    local function LayoutTopbar()
+        local total = Window.Size.X.Offset - 16
+        local f2w = TopBtnCount > 0 and (TopBtnCount * 28 + (TopBtnCount - 1) * 4 + 12) or 0
+        TopBarF2.Visible = TopBtnCount > 0
+        TopBarF2.Size = UDim2.new(0, f2w, 1, 0)
+        TopBarF2.Position = UDim2.new(1, -(F3W + 6), 0, 0)
+        local f1w = total - F3W - 6 - (f2w > 0 and f2w + 6 or 0)
+        TopBarF1.Size = UDim2.new(0, math.max(f1w, 60), 1, 0)
+    end
+    LayoutTopbar()
+
+    -- Body -------------------------------------------------------------
+    local Body = VexUI:Create("Frame", {
+        Parent = Main, Position = UDim2.new(0, 8, 0, 8 + TH + 6), Size = UDim2.new(1, -16, 1, -(8 + TH + 6 + 8)),
+        BackgroundTransparency = 1,
+    })
+
+    local TabFrame = Panel(Body, "Sidebar", 0, 16)
+    TabFrame.Size = UDim2.new(0, Window.SideBarWidth, 1, 0)
+    TabFrame.ClipsDescendants = true
+
+    local Content = VexUI:Create("Frame", {
+        Parent = Body, Position = UDim2.new(0, Window.SideBarWidth + 6, 0, 0),
+        Size = UDim2.new(1, -(Window.SideBarWidth + 6), 1, 0), BackgroundTransparency = 1,
+    })
+    local PagesHolder = VexUI:Create("Frame", {
+        Parent = Content, Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+    })
+
+    -- User frame
+    local UserFrame = VexUI:Create("Frame", {
+        Parent = TabFrame, AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -6),
+        Size = UDim2.new(1, -12, 0, 42), ClipsDescendants = true, ZIndex = 5, Visible = Window.User.Enabled or false,
+        ThemeID = { BackgroundColor3 = "Background" },
+    }, { Corner(14) })
+    local Avatar = VexUI:Create("ImageLabel", {
+        Parent = UserFrame, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0.5, 0),
+        Size = UDim2.new(0, 28, 0, 28), BackgroundTransparency = 0.7, ZIndex = 6,
+    }, { Corner(64) })
+    local UserTitle = VexUI:Create("TextLabel", {
+        Parent = UserFrame, Size = UDim2.new(1, 0, 1, 0), Text = "", TextSize = 12, TextXAlignment = Left, ZIndex = 6,
+        TextTruncate = Enum.TextTruncate.AtEnd, ThemeID = { TextColor3 = "User.Text|Text" },
+    }, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, 42), PaddingBottom = UDim.new(0, 14), PaddingRight = UDim.new(0, 4) }) })
+    local UserSub = VexUI:Create("TextLabel", {
+        Parent = UserFrame, Size = UDim2.new(1, 0, 1, 0), Text = "", TextSize = 11, TextTransparency = 0.55,
+        TextXAlignment = Left, ZIndex = 6, TextTruncate = Enum.TextTruncate.AtEnd,
+        ThemeID = { TextColor3 = "User.Text|Text" },
+    }, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, 42), PaddingTop = UDim.new(0, 14), PaddingRight = UDim.new(0, 4) }) })
+    local UserBtn = VexUI:Create("TextButton", { Parent = UserFrame, Size = UDim2.new(1, 0, 1, 0), ZIndex = 20, Visible = Window.User.Callback ~= nil })
+    UserBtn.Activated:Connect(function() Safe(Window.User.Callback) end)
+
+    local LeftScroll = VexUI:Create("ScrollingFrame", {
+        Parent = TabFrame, Position = UDim2.new(0, 0, 0, 0),
+        Size = UDim2.new(1, 0, 1, UserFrame.Visible and -54 or -4), AutomaticCanvasSize = AutoY,
+        ScrollBarThickness = 0, ScrollingDirection = Enum.ScrollingDirection.Y,
+        ElasticBehavior = Enum.ElasticBehavior.WhenScrollable, ZIndex = 3,
+    }, {
+        Utility:ListLayout("V", 4),
+        Utility:Padding({ left = 6, right = 6, top = 8, bottom = 6 }),
+    })
+
+    local function RefreshUser()
+        local anon = Window.User.Anonymous
+        UserTitle.Text = anon and "Anonymous" or LocalPlayer.DisplayName
+        UserSub.Text = anon and "@Anonymous" or ("@" .. LocalPlayer.Name)
+        task.spawn(function()
+            local ok, img = pcall(function()
+                return Players:GetUserThumbnailAsync(anon and 1 or LocalPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+            end)
+            if ok and img then Avatar.Image = img end
+        end)
+    end
+    RefreshUser()
+
+    function Window:UserEnabled(Value)
+        UserFrame.Visible = Value and true or false
+        LeftScroll.Size = UDim2.new(1, 0, 1, Value and -54 or -4)
+    end
+    function Window:Anonymous(Value)
+        Window.User.Anonymous = Value
+        RefreshUser()
+    end
+
+    -- Resize handle
+    local HandleSize = IsTouch and 30 or 22
+    local ResizeHandle = VexUI:Create("Frame", {
+        Parent = Main, AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -2, 1, -2),
+        Size = UDim2.new(0, HandleSize, 0, HandleSize), BackgroundTransparency = 1, Active = true, ZIndex = 80,
+        Visible = Window.Resizable,
+    })
+    local HandleImg = VexUI:Create("ImageLabel", {
+        Parent = ResizeHandle, Size = UDim2.new(0, 18, 0, 18), AnchorPoint = Vector2.new(1, 1),
+        Position = UDim2.new(1, -3, 1, -3), Image = "rbxassetid://97284127540888", ImageTransparency = 0.8,
+        ThemeID = { ImageColor3 = "IconColor" },
+    })
+
+    -- Tags -------------------------------------------------------------
+    local Tags = 0
+    local TagScroll
+    function Window:Tag(Cfg)
+        Cfg = Cfg or {}
+        Tags += 1
+        if not TagScroll then
+            local TagFrame = VexUI:Create("Frame", {
+                Parent = Content, AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0),
+                Size = UDim2.new(1, 0, 0, 34), ClipsDescendants = true, BackgroundTransparency = 0.2,
+                ThemeID = { BackgroundColor3 = "SideBar" },
+            }, { Corner(16), GStroke({ Alt = true }) })
+            TagScroll = VexUI:Create("ScrollingFrame", {
+                Parent = TagFrame, Size = UDim2.new(1, 0, 1, 0), ScrollBarThickness = 0, AutomaticCanvasSize = AutoX,
+                ScrollingDirection = Enum.ScrollingDirection.X,
+            }, { Utility:ListLayout("H", 5, Enum.VerticalAlignment.Center), Utility:Padding({ left = 6, right = 6 }) })
+            PagesHolder.Size = UDim2.new(1, 0, 1, -40)
+        end
+
+        local Tag = { Name = Cfg.Name or "Tag", Icon = Cfg.Icon, Color = Cfg.Color, Corner = Cfg.Corner or 16 }
+        local TagF = VexUI:Create("Frame", {
+            Parent = TagScroll, Size = UDim2.new(0, 20, 0, 24), AutomaticSize = AutoX, LayoutOrder = Tags,
+            BackgroundColor3 = Tag.Color, ThemeID = (not Tag.Color) and { BackgroundColor3 = "ElementColor" } or nil,
+        }, {
+            Corner(Tag.Corner), VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }),
+            Utility:ListLayout("H", 4, Enum.VerticalAlignment.Center),
+        })
+        local fixedColor = Tag.Color and Contrast(Tag.Color) or nil
+        local TagIcon
+        if Tag.Icon then
+            TagIcon = VexUI:Create("ImageLabel", {
+                Parent = TagF, LayoutOrder = 1, Size = UDim2.new(0, 14, 0, 14), ImageColor3 = fixedColor,
+                ThemeID = (not fixedColor) and { ImageColor3 = "Tag.Icon|IconColor" } or nil,
+            })
+            SetIcon(TagIcon, Tag.Icon)
+        end
+        local TagTitle = VexUI:Create("TextLabel", {
+            Parent = TagF, LayoutOrder = 2, Size = UDim2.new(0, 0, 0, 14), AutomaticSize = AutoX, Text = Tag.Name,
+            RichText = true, TextSize = 12, TextColor3 = fixedColor,
+            ThemeID = (not fixedColor) and { TextColor3 = "Tag.Text|Text" } or nil,
+        })
+        function Tag:SetTitle(i) TagTitle.Text = i end
+        function Tag:SetColor(i)
+            VexUI.Objects[TagF] = nil
+            TagF.BackgroundColor3 = i
+            local c = Contrast(i)
+            TagTitle.TextColor3 = c
+            if TagIcon then TagIcon.ImageColor3 = c end
+        end
+        function Tag:SetCorner(i) TagF:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, i) end
+        return Tag
+    end
+
+    -- Search -----------------------------------------------------------
+    local SearchPanel = VexUI:Create("Frame", {
+        Parent = TopBar, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, TH + 6),
+        Size = UDim2.new(0, 250, 0, 0), ClipsDescendants = true, Visible = false, ZIndex = 60,
+        ThemeID = { BackgroundColor3 = "SideBar" },
+    }, { Corner(14), GStroke({ Alt = true }) })
+    local SearchScroll = VexUI:Create("ScrollingFrame", {
+        Parent = SearchPanel, Size = UDim2.new(1, 0, 1, 0), AutomaticCanvasSize = AutoY, ScrollBarThickness = 2,
+        ZIndex = 61, ThemeID = { ScrollBarImageColor3 = "IconColor" },
+    }, { Utility:ListLayout("V", 4), Utility:Padding({ top = 6, bottom = 6, left = 6, right = 8 }) })
+
+    local function ClearSearchResults()
+        for _, v in ipairs(SearchScroll:GetChildren()) do
+            if v:IsA("GuiObject") then v:Destroy() end
+        end
+    end
+    local function Strip(s) return (tostring(s or ""):gsub("<[^>]->", "")) end
+
+    local function JumpTo(entry)
+        entry.SelectFn()
+        task.delay(0.15, function()
+            local el, sc = entry.Frame, entry.Scroll
+            if el and el.Parent and sc then
+                local y = (el.AbsolutePosition.Y - sc.AbsolutePosition.Y) + sc.CanvasPosition.Y - 8
+                sc.CanvasPosition = Vector2.new(0, math.max(0, y))
+                if el:IsA("Frame") and el.BackgroundTransparency < 1 then
+                    local base = el.BackgroundTransparency
+                    Utility:TweenObject(el, { BackgroundTransparency = 0 }, 0.15)
+                    task.delay(0.2, function()
+                        Utility:TweenObject(el, { BackgroundTransparency = base }, 0.5)
+                    end)
+                end
+            end
+        end)
+    end
+
+    local function RenderSearch(query)
+        ClearSearchResults()
+        local q = string.lower(query)
+        if q == "" then
+            Utility:TweenObject(SearchPanel, { Size = UDim2.new(0, 250, 0, 0) }, 0.15)
+            task.delay(0.16, function() if SearchBox.Text == "" then SearchPanel.Visible = false end end)
+            return
+        end
+        SearchPanel.Visible = true
+        local count = 0
+        for _, entry in ipairs(Window.SearchIndex) do
+            if entry.Title and entry.SelectFn then
+                local hay = string.lower(Strip(entry.Title) .. " " .. Strip(entry.Desc) .. " " .. tostring(entry.TabTitle or ""))
+                if string.find(hay, q, 1, true) and count < 20 then
+                    count += 1
+                    local Row = VexUI:Create("TextButton", {
+                        Parent = SearchScroll, Size = UDim2.new(1, 0, 0, 32), LayoutOrder = count, ZIndex = 62,
+                        BackgroundTransparency = 0.4, ThemeID = { BackgroundColor3 = "ElementColor" },
+                    }, { Corner(12) })
+                    local Ic = VexUI:Create("ImageLabel", {
+                        Parent = Row, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 9, 0.5, 0),
+                        Size = UDim2.new(0, 16, 0, 16), ZIndex = 63, ThemeID = { ImageColor3 = "Search.Icon|IconColor" },
+                    })
+                    SetIcon(Ic, entry.Icon or "circle")
+                    VexUI:Create("TextLabel", {
+                        Parent = Row, Position = UDim2.new(0, 32, 0, 0), Size = UDim2.new(1, -100, 1, 0),
+                        Text = Strip(entry.Title), TextSize = 12, TextXAlignment = Left, ZIndex = 63,
+                        TextTruncate = Enum.TextTruncate.AtEnd, ThemeID = { TextColor3 = "Search.Text|Text" },
+                    })
+                    VexUI:Create("TextLabel", {
+                        Parent = Row, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -8, 0, 0),
+                        Size = UDim2.new(0, 62, 1, 0), Text = tostring(entry.TabTitle or ""), TextSize = 10,
+                        TextTransparency = 0.55, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 63,
+                        TextTruncate = Enum.TextTruncate.AtEnd, ThemeID = { TextColor3 = "Search.Text|Text" },
+                    })
+                    Row.InputBegan:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                            JumpTo(entry)
+                            SearchBox.Text = ""
+                            SearchBox:ReleaseFocus()
+                        end
+                    end)
+                end
+            end
+        end
+        if count == 0 then
+            VexUI:Create("TextLabel", {
+                Parent = SearchScroll, Size = UDim2.new(1, 0, 0, 28), Text = "No results", TextSize = 11,
+                TextTransparency = 0.5, ZIndex = 62, ThemeID = { TextColor3 = "Text" },
+            })
+            count = 1
+        end
+        Utility:TweenObject(SearchPanel, { Size = UDim2.new(0, 250, 0, math.min(count * 36 + 12, 190)) }, 0.2)
+    end
+
+    SearchBox:GetPropertyChangedSignal("Text"):Connect(function() RenderSearch(SearchBox.Text) end)
+    SearchBox.Focused:Connect(function() VexUI:SetThemeKey(PillStroke, "Color", "Accent") end)
+    SearchBox.FocusLost:Connect(function()
+        VexUI:SetThemeKey(PillStroke, "Color", "Outline")
+        task.wait(0.25)
+        if not SearchBox:IsFocused() then
+            SearchBox.Text = ""
+            ClearSearchResults()
+            Utility:TweenObject(SearchPanel, { Size = UDim2.new(0, 250, 0, 0) }, 0.15)
+            task.delay(0.16, function() SearchPanel.Visible = false end)
+        end
+    end)
+
+    -- Topbar buttons ---------------------------------------------------
+    local function TopButtonBase(order)
+        TopBtnCount += 1
+        LayoutTopbar()
+        local Btn = VexUI:Create("Frame", {
+            Parent = TopBarF2, Size = UDim2.new(0, 28, 0, 28), BackgroundTransparency = 0.6, LayoutOrder = order or TopBtnCount,
+            ThemeID = { BackgroundColor3 = "Background" },
+        }, { Corner(10), GStroke({ Alt = true }) })
+        local Icon = VexUI:Create("ImageButton", {
+            Parent = Btn, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.new(1, 0, 1, 0), ImageTransparency = 1, ZIndex = 4,
+        })
+        local Img = VexUI:Create("ImageLabel", {
+            Parent = Btn, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.new(0, 16, 0, 16), ZIndex = 3, ThemeID = { ImageColor3 = "IconColor" },
+        })
+        return Btn, Icon, Img
+    end
+
+    function Window:CreateTopbarButton(Cfg)
+        Cfg = Cfg or {}
+        local B = { Icon = Cfg.Icon or "bird", Callback = Cfg.Callback or function() end, Order = Cfg.Order or 1 }
+        local Btn, Hit, Img = TopButtonBase(B.Order)
+        SetIcon(Img, B.Icon)
+        Hit.Activated:Connect(function()
+            Safe(B.Callback)
+            Utility:TweenObject(Btn, { BackgroundTransparency = 0.1 }, 0.1)
+            task.delay(0.12, function() Utility:TweenObject(Btn, { BackgroundTransparency = 0.6 }, 0.2) end)
+        end)
+        function B:SetIcon(i) SetIcon(Img, i) end
+        return B
+    end
+
+    function Window:CreateTopbarToggle(Cfg)
+        Cfg = Cfg or {}
+        local T = {
+            Icon = Cfg.Icon or "bird", Callback = Cfg.Callback or function() end, Order = Cfg.Order or 1,
+            Default = Cfg.Default or false, EnableIcon = Cfg.EnableIcon or Cfg.Icon or "bird",
+            DisableIcon = Cfg.DisableIcon or Cfg.Icon or "bird",
+            EnableBackground = Cfg.EnableBackground, DisableBackground = Cfg.DisableBackground,
+        }
+        local Btn, Hit, Img = TopButtonBase(T.Order)
+        local function state(fire)
+            local on = T.Default
+            SetIcon(Img, on and T.EnableIcon or T.DisableIcon)
+            if on then
+                if T.EnableBackground then
+                    VexUI.Objects[Btn] = nil
+                    Utility:TweenObject(Btn, { BackgroundColor3 = T.EnableBackground, BackgroundTransparency = 0 }, 0.2)
+                else
+                    VexUI:SetThemeKey(Btn, "BackgroundColor3", "Accent")
+                    Utility:TweenObject(Btn, { BackgroundTransparency = 0.3 }, 0.2)
+                end
+            else
+                if T.DisableBackground then
+                    VexUI.Objects[Btn] = nil
+                    Utility:TweenObject(Btn, { BackgroundColor3 = T.DisableBackground, BackgroundTransparency = 0.6 }, 0.2)
+                else
+                    VexUI:SetThemeKey(Btn, "BackgroundColor3", "Background")
+                    Utility:TweenObject(Btn, { BackgroundTransparency = 0.6 }, 0.2)
+                end
+            end
+            if fire then Safe(T.Callback, on) end
+        end
+        state(true)
+        Hit.Activated:Connect(function()
+            T.Default = not T.Default
+            state(true)
+        end)
+        function T:SetValue(v) T.Default = v and true or false state(true) end
+        function T:GetValue() return T.Default end
+        return T
+    end
+
+    -- Island open button (minimised state) ----------------------------
+    local MinzUI = VexUI:Create("TextButton", {
+        Parent = Island, LayoutOrder = 1, Size = UDim2.new(0, 0, 0, 30), AutomaticSize = AutoX,
+        BackgroundTransparency = 0.2, ClipsDescendants = true, ZIndex = 110,
+        ThemeID = { BackgroundColor3 = "SideBar" },
+    }, {
+        Corner(15), Utility:ListLayout("H", 5, Enum.VerticalAlignment.Center),
+        Utility:Padding({ left = 8, right = 12 }),
+    })
+    local MinzStroke = VexUI:Create("UIStroke", {
+        Parent = MinzUI, Color = Color3.new(1, 1, 1), Thickness = 1, LineJoinMode = Enum.LineJoinMode.Round,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    }, { VexUI:Create("UIGradient", { Rotation = 45 }) })
+    local MinzGrad = MinzStroke:FindFirstChildOfClass("UIGradient")
+    VexUI:AddThemeObject(MinzStroke, { Color = "Outline" })
+
+    local MinzIcon
+    if Window.Icon then
+        MinzIcon = VexUI:Create("ImageLabel", {
+            Parent = MinzUI, LayoutOrder = 1, Size = UDim2.new(0, 18, 0, 18), ZIndex = 111,
+            ThemeID = { ImageColor3 = "IconColor" },
+        })
+        SetIcon(MinzIcon, Window.Icon)
+    end
+    local MinzLabel = VexUI:Create("TextLabel", {
+        Parent = MinzUI, LayoutOrder = 2, Size = UDim2.new(0, 0, 1, 0), AutomaticSize = AutoX, Text = Window.Name,
+        TextSize = 12, ZIndex = 111, ThemeID = { TextColor3 = "Text" },
+    })
+    local MinzCorner = MinzUI:FindFirstChildOfClass("UICorner")
+    MinzUI.Visible = false
+
+    function Window:EditOpenButton(Cfg)
+        Cfg = Cfg or {}
+        local Edit = {
+            Title = Cfg.Title or Window.Name, Icon = Cfg.Icon or Window.Icon, Color = Cfg.Color,
+            Transparency = Cfg.Transparency or 0.2, Rotation = Cfg.Rotation or 45,
+            AutoRotation = Cfg.AutoRotation or false, Speed = Cfg.Speed or 15,
+            StrokeThickness = Cfg.StrokeThickness or 1, CornerRadius = Cfg.CornerRadius or UDim.new(0, 15),
+        }
+        MinzLabel.Text = Edit.Title
+        MinzCorner.CornerRadius = Edit.CornerRadius
+        if Edit.Icon then
+            if not MinzIcon then
+                MinzIcon = VexUI:Create("ImageLabel", {
+                    Parent = MinzUI, LayoutOrder = 1, Size = UDim2.new(0, 18, 0, 18), ZIndex = 111,
+                    ThemeID = { ImageColor3 = "IconColor" },
+                })
+            end
+            SetIcon(MinzIcon, Edit.Icon)
+        end
+        if Edit.Color then
+            if typeof(Edit.Color) == "Color3" then
+                MinzGrad.Color = ColorSequence.new(Edit.Color)
+            elseif typeof(Edit.Color) == "ColorSequence" then
+                MinzGrad.Color = Edit.Color
+            end
+        end
+        MinzUI.BackgroundTransparency = Edit.Transparency
+        MinzGrad.Rotation = Edit.Rotation
+        MinzStroke.Thickness = Edit.StrokeThickness
+        if Edit.AutoRotation then
+            task.spawn(function()
+                while Edit.AutoRotation and MinzUI.Parent do
+                    local dt = RunService.RenderStepped:Wait()
+                    MinzGrad.Rotation = (MinzGrad.Rotation + Edit.Speed * dt) % 360
+                end
+            end)
+        end
+        return Window, Edit
+    end
+
+    -- Tabs ------------------------------------------------------------
+    function Window:SelectTab(i)
+        local t
+        if type(i) == "number" then
+            t = Window.TabList[i]
+        else
+            for _, tab in ipairs(Window.TabList) do if tab.Title == i then t = tab break end end
+        end
+        if t and t.Select then t.Select() end
+    end
+
+    local function NewCtx(Tab, Parent, Scroll)
+        local ctx = { Window = Window, Tab = Tab, Parent = Parent, Scroll = Scroll }
+        function ctx:Register(entry)
+            entry.TabTitle = Tab.Title
+            entry.SelectFn = Tab.Select
+            entry.Scroll = self.Scroll or Scroll
+            table.insert(Window.SearchIndex, entry)
+            if self.OnAdd then self.OnAdd(entry.Frame) end
+            return entry
+        end
+        return ctx
+    end
+
+    function Window:Tab(Cfg, parentOverride)
+        Cfg = Cfg or {}
+        local Tab = {
+            Title = Cfg.Title or "Tab", Icon = Cfg.Icon, Border = Cfg.Border or false,
+            Callback = Cfg.Callback or function() end,
+        }
+
+        local TabBack = VexUI:Create("Frame", {
+            Parent = parentOverride or LeftScroll, Size = UDim2.new(1, 0, 0, 32), AutomaticSize = AutoY,
+            BackgroundTransparency = 1, LayoutOrder = #Window.TabList + 1,
+            ThemeID = { BackgroundColor3 = "Tab.Background|ElementColor" },
+        }, { Corner(11), GStroke({ Thickness = 0.6 }) })
+        local TabStroke = TabBack:FindFirstChildOfClass("UIStroke")
+        TabStroke.Transparency = 1
+
+        local TabTitle = VexUI:Create("TextLabel", {
+            Parent = TabBack, Size = UDim2.new(1, 0, 0, 32), AutomaticSize = AutoY, RichText = true, Text = Tab.Title,
+            TextSize = 13, TextWrapped = true, TextXAlignment = Left, TextTransparency = 0.45, ZIndex = 3,
+            ThemeID = { TextColor3 = "Tab.Text|Text" },
+        }, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, Tab.Icon and 38 or 14), PaddingRight = UDim.new(0, 6) }) })
+
+        local TabIcon
+        if Tab.Icon then
+            TabIcon = VexUI:Create("ImageLabel", {
+                Parent = TabBack, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 13, 0.5, 0),
+                Size = UDim2.new(0, 19, 0, 19), ImageTransparency = 0.45, ZIndex = 3,
+                ThemeID = { ImageColor3 = "Tab.IconColor|IconColor" },
+            })
+            SetIcon(TabIcon, Tab.Icon)
+        end
+        local AccentBar = VexUI:Create("Frame", {
+            Parent = TabBack, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0),
+            Size = UDim2.new(0, 3, 0, 14), BackgroundTransparency = 1, ZIndex = 4, ThemeID = { BackgroundColor3 = "Accent" },
+        }, { Corner(2) })
+        local TabTRG = VexUI:Create("TextButton", { Parent = TabBack, Size = UDim2.new(1, 0, 1, 0), ZIndex = 6 })
+
+        local Page = VexUI:Create("Frame", {
+            Parent = PagesHolder, Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 0.35, Visible = false,
+            ThemeID = { BackgroundColor3 = "SideBar" },
+        }, { Corner(16), GStroke({ Alt = true, Thickness = 0.6 }) })
+        local RightScroll = VexUI:Create("ScrollingFrame", {
+            Parent = Page, Position = UDim2.new(0, 0, 0, 5), Size = UDim2.new(1, 0, 1, -10),
+            AutomaticCanvasSize = AutoY, ScrollBarThickness = 3, ScrollBarImageTransparency = 0.4,
+            ScrollingDirection = Enum.ScrollingDirection.Y, ElasticBehavior = Enum.ElasticBehavior.WhenScrollable,
+            ClipsDescendants = true, ThemeID = { ScrollBarImageColor3 = "IconColor" },
+        }, {
+            Utility:ListLayout("V", 5),
+            Utility:Padding({ top = 5, bottom = 8, left = 6, right = 10 }),
+        })
+
+        local active = false
+        Tab._SetActive = function(state)
+            active = state
+            Utility:TweenObject(TabBack, { BackgroundTransparency = state and 0.65 or 1 }, 0.2)
+            Utility:TweenObject(TabStroke, { Transparency = (state and Tab.Border) and 0 or 1 }, 0.2)
+            Utility:TweenObject(TabTitle, { TextTransparency = state and 0 or 0.45 }, 0.2)
+            Utility:TweenObject(AccentBar, { BackgroundTransparency = state and 0 or 1 }, 0.2)
+            if TabIcon then Utility:TweenObject(TabIcon, { ImageTransparency = state and 0 or 0.45 }, 0.2) end
+            if state then
+                Page.Visible = true
+                Page.BackgroundTransparency = 0.8
+                RightScroll.Position = UDim2.new(0, 0, 0, 16)
+                Utility:TweenObject(Page, { BackgroundTransparency = 0.35 }, 0.25)
+                Utility:TweenObject(RightScroll, { Position = UDim2.new(0, 0, 0, 5) }, 0.25, QuadOut, DirOut)
+            else
+                Page.Visible = false
+            end
+        end
+
+        TabTRG.MouseEnter:Connect(function()
+            if not active then Utility:TweenObject(TabBack, { BackgroundTransparency = 0.88 }, 0.12) end
+        end)
+        TabTRG.MouseLeave:Connect(function()
+            if not active then Utility:TweenObject(TabBack, { BackgroundTransparency = 1 }, 0.12) end
+        end)
+
+        local function SelectTab()
+            if Window.CurrentTabObj == Tab and active then return end
+            for _, t in ipairs(Window.TabList) do
+                if t ~= Tab then t._SetActive(false) end
+            end
+            Window.CurrentTabObj = Tab
+            Window.CurrentTab = Tab
+            Window.ActiveElementFrame = Page
+            Tab._SetActive(true)
+            Safe(Tab.Callback)
+        end
+        Tab.Select = function() SelectTab() end
+        TabTRG.Activated:Connect(SelectTab)
+
+        table.insert(Window.Tabs, TabBack)
+        table.insert(Window.TabOrder, Tab.Title)
+        table.insert(Window.TabList, Tab)
+        table.insert(Window.SearchIndex, {
+            Title = Tab.Title, Icon = Tab.Icon or "layout-grid", Type = "Tab", TabTitle = "Tab",
+            SelectFn = SelectTab, Frame = TabBack, Scroll = RightScroll,
+        })
+
+        local ctx = NewCtx(Tab, RightScroll, RightScroll)
+        AttachElementMethods(Tab, ctx)
+
+        if #Window.TabList == 1 then
+            task.defer(function()
+                if not Window.CurrentTabObj then SelectTab() end
+            end)
+        end
+        return Tab
+    end
+
+    function Window:Section(Cfg)
+        Cfg = Cfg or {}
+        local Section = {
+            Title = Cfg.Title or "Section", Icon = Cfg.Icon, Opened = (Cfg.Opened == nil) and true or Cfg.Opened,
+        }
+        local isOpen = Section.Opened
+
+        local SectionFrame = VexUI:Create("Frame", {
+            Parent = LeftScroll, AutomaticSize = AutoY, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0),
+            LayoutOrder = #Window.TabList + 1,
+        }, { Utility:ListLayout("V", 3) })
+
+        local Head = VexUI:Create("TextButton", { Parent = SectionFrame, Size = UDim2.new(1, 0, 0, 28), ZIndex = 5 })
+        local Arrow = VexUI:Create("ImageLabel", {
+            Parent = Head, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
+            Size = UDim2.new(0, 14, 0, 14), Rotation = isOpen and 180 or 0, ThemeID = { ImageColor3 = "Text" },
+        })
+        SetIcon(Arrow, "chevron-down")
+        VexUI:Create("TextLabel", {
+            Parent = Head, Size = UDim2.new(1, 0, 1, 0), Text = Section.Title, RichText = true, TextSize = 14,
+            TextXAlignment = Left, ZIndex = 6, ThemeID = { TextColor3 = "Text" },
+        }, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, Section.Icon and 28 or 10) }) })
+        if Section.Icon then
+            local I = VexUI:Create("ImageLabel", {
+                Parent = Head, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0.5, 0),
+                Size = UDim2.new(0, 16, 0, 16), ZIndex = 6, ThemeID = { ImageColor3 = "IconColor" },
+            })
+            SetIcon(I, Section.Icon)
+        end
+
+        local Roll = VexUI:Create("Frame", {
+            Parent = SectionFrame, LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AutoY,
+            ClipsDescendants = true, BackgroundTransparency = 1,
+        }, { Utility:ListLayout("V", 4) })
+        local RollLayout = Roll:FindFirstChildOfClass("UIListLayout")
+
+        local token = 0
+        local function setOpen(open, instant)
+            isOpen = open
+            token += 1
+            local my = token
+            Utility:TweenObject(Arrow, { Rotation = open and 180 or 0 }, 0.16)
+            if open then
+                if instant then Roll.AutomaticSize = AutoY Roll.Size = UDim2.new(1, 0, 0, 0) return end
+                Roll.AutomaticSize = AutoNone
+                Utility:TweenObject(Roll, { Size = UDim2.new(1, 0, 0, Unscale(RollLayout.AbsoluteContentSize.Y)) }, 0.2)
+                task.delay(0.24, function()
+                    if token == my and isOpen then Roll.AutomaticSize = AutoY Roll.Size = UDim2.new(1, 0, 0, 0) end
+                end)
+            else
+                Roll.Size = UDim2.new(1, 0, 0, Unscale(Roll.AbsoluteSize.Y))
+                Roll.AutomaticSize = AutoNone
+                if instant then Roll.Size = UDim2.new(1, 0, 0, 0)
+                else Utility:TweenObject(Roll, { Size = UDim2.new(1, 0, 0, 0) }, 0.2) end
+            end
+        end
+        Head.Activated:Connect(function() setOpen(not isOpen) end)
+        if not isOpen then setOpen(false, true) end
+
+        function Section:Tab(c) return Window:Tab(c, Roll) end
+        function Section:Toggle(v) if v == nil then v = not isOpen end setOpen(v and true or false) end
+        return Section
+    end
+
+    -- Dialog ---------------------------------------------------------
+    function Window:Dialog(Cfg)
+        Cfg = Cfg or {}
+        local Dialog = {
+            Title = Cfg.Title or "Dialog", Desc = Cfg.Desc, Buttons = Cfg.Buttons or {}, Image = Cfg.Image,
+            ImageSizeY = Cfg.ImageSizeY or 60, Count = 0,
+        }
+        local Overlay = VexUI:Create("Frame", {
+            Parent = Main, Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(0, 0, 0),
+            BackgroundTransparency = 1, Active = true, ZIndex = 100,
+        }, { Corner(18) })
+        Utility:TweenObject(Overlay, { BackgroundTransparency = 0.45 }, 0.2)
+
+        local Scale = VexUI:Create("UIScale", { Scale = 0.9 })
+        local Card = VexUI:Create("Frame", {
+            Parent = Overlay, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.new(0, math.min(250, Window.Size.X.Offset - 40), 0, 0), AutomaticSize = AutoY,
+            Active = true, ZIndex = 101, ThemeID = { BackgroundColor3 = "Dialog.Background|SideBar" },
+        }, {
+            Corner(16), GStroke({ Alt = true }), Scale, Utility:ListLayout("V", 8), Utility:Padding(12),
+        })
+        Utility:TweenObject(Scale, { Scale = 1 }, 0.25, Enum.EasingStyle.Back, DirOut)
+
+        if Dialog.Image then
+            VexUI:Create("ImageLabel", {
+                Parent = Card, Size = UDim2.new(1, 0, 0, Dialog.ImageSizeY), Image = Dialog.Image,
+                ScaleType = Enum.ScaleType.Crop, LayoutOrder = 0, ZIndex = 102,
+            }, { Corner(12) })
+        end
+        CreateText(Card, Dialog.Title, { TextSize = 14, LayoutOrder = 1, ZIndex = 102, ThemeKey = "Dialog.Text|Text" })
+        if Dialog.Desc then
+            CreateText(Card, Dialog.Desc, {
+                TextSize = 12, LayoutOrder = 2, TextTransparency = 0.4, ZIndex = 102, ThemeKey = "Dialog.Text|Text",
+                FontFace = TextFontRegular,
+            })
+        end
+
+        local function Close()
+            Utility:TweenObject(Overlay, { BackgroundTransparency = 1 }, 0.2)
+            Utility:TweenObject(Scale, { Scale = 0.9 }, 0.2)
+            task.delay(0.22, function() Overlay:Destroy() end)
+        end
+        Dialog.Close = Close
+
+        local ButtonsFrame = VexUI:Create("Frame", {
+            Parent = Card, LayoutOrder = 3, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AutoY,
+            BackgroundTransparency = 1, ZIndex = 102,
+        }, { Utility:ListLayout("V", 6) })
+        for i = 1, #Dialog.Buttons, 2 do
+            local Row = VexUI:Create("Frame", {
+                Parent = ButtonsFrame, LayoutOrder = i, Size = UDim2.new(1, 0, 0, IsTouch and 36 or 32),
+                BackgroundTransparency = 1, ZIndex = 102,
+            }, { Utility:ListLayout("H", 6) })
+            local pair = { Dialog.Buttons[i], Dialog.Buttons[i + 1] }
+            local n = pair[2] and 2 or 1
+            for col = 1, n do
+                local BC = pair[col]
+                Dialog.Count += 1
+                local B = VexUI:Create("TextButton", {
+                    Parent = Row, LayoutOrder = col, Size = (n == 1) and UDim2.new(1, 0, 1, 0) or UDim2.new(0.5, -3, 1, 0),
+                    Text = BC.Text or "Button", TextSize = 13, BackgroundTransparency = BC.Primary and 0.1 or 0.3, ZIndex = 103,
+                    ThemeID = {
+                        BackgroundColor3 = BC.Primary and "Accent" or "Dialog.Button|ElementColor", TextColor3 = "Text",
+                    },
+                }, { Corner(11) })
+                B.Activated:Connect(function()
+                    Safe(BC.Callback)
+                    Close()
+                end)
+            end
+        end
+        return Dialog
+    end
+
+    -- proxy on UI so old code (UI:Dialog / UI:CreateTopbarButton) still works
+    UI.Dialog = function(_, c) return Window:Dialog(c) end
+    UI.CreateTopbarButton = function(_, c) return Window:CreateTopbarButton(c) end
+    UI.CreateTopbarToggle = function(_, c) return Window:CreateTopbarToggle(c) end
+
+    -- Scale ----------------------------------------------------------
+    local function ComputeAutoScale()
+        local cam = workspace.CurrentCamera
+        if not cam then return 1 end
+        local vp = cam.ViewportSize
+        local margin = IsMobile and 14 or 40
+        local sx = (vp.X - margin * 2) / Window.Size.X.Offset
+        local sy = (vp.Y - margin * 2) / Window.Size.Y.Offset
+        return math.clamp(math.min(sx, sy), 0.35, 1)
+    end
+    function Window:SetUIScale(v)
+        Window._ManualScale = true
+        Utility.Scale = v
+        Utility:TweenObject(MainScale, { Scale = v }, 0.2, Enum.EasingStyle.Quint, DirOut)
+        return Window
+    end
+    function Window:SetAutoScale(v)
+        Window.AutoScale = v and true or false
+        if Window.AutoScale then
+            Window._ManualScale = false
+            local s = ComputeAutoScale()
+            Utility.Scale = s
+            Utility:TweenObject(MainScale, { Scale = s }, 0.2)
+        end
+    end
+    function Window:GetUIScale() return Window.Size end
+    local function ApplyAutoScale()
+        if Window.AutoScale and not Window._ManualScale then
+            local s = ComputeAutoScale()
+            Utility.Scale = s
+            Utility:TweenObject(MainScale, { Scale = s }, 0.2)
+        end
+    end
+    do
+        local s = Window.AutoScale and ComputeAutoScale() or 1
+        Utility.Scale = s
+        MainScale.Scale = s
+    end
+    local cam = workspace.CurrentCamera
+    if cam then Window:_Connect(cam:GetPropertyChangedSignal("ViewportSize"), ApplyAutoScale) end
+
+    -- Resize ---------------------------------------------------------
+    function Window:Resize(sizeX, sizeY, instant)
+        local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
+        local scale = math.max(Utility.Scale, 0.01)
+        local maxX = math.min(MAX_W, math.floor((vp.X - 8) / scale))
+        local maxY = math.min(MAX_H, math.floor((vp.Y - 8) / scale))
+        sizeX = math.clamp(sizeX, MIN_W, math.max(MIN_W, maxX))
+        sizeY = math.clamp(sizeY, MIN_H, math.max(MIN_H, maxY))
+        Window.Size = UDim2.new(0, sizeX, 0, sizeY)
+        if instant then
+            Main.Size = Window.Size
+        else
+            Utility:TweenObject(Main, { Size = Window.Size }, 0.25, Enum.EasingStyle.Back, DirOut)
+        end
+        LayoutTopbar()
+    end
+    function Window:GetWindowSize() return Window.Size.X.Offset, Window.Size.Y.Offset end
+    function Window:SetResizable(v)
+        Window.Resizable = v and true or false
+        ResizeHandle.Visible = Window.Resizable
+    end
+
+    do
+        local resizing, rInput, startPos, startSize = false, nil, nil, nil
+        ResizeHandle.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                resizing = true
+                rInput = input
+                startPos = input.Position
+                startSize = Window.Size
+                Utility:TweenObject(HandleImg, { ImageTransparency = 0 }, 0.1)
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        resizing = false
+                        Utility:TweenObject(HandleImg, { ImageTransparency = 0.8 }, 0.15)
+                    end
+                end)
+            end
+        end)
+        ResizeHandle.MouseEnter:Connect(function() Utility:TweenObject(HandleImg, { ImageTransparency = 0.35 }, 0.15) end)
+        ResizeHandle.MouseLeave:Connect(function()
+            if not resizing then Utility:TweenObject(HandleImg, { ImageTransparency = 0.8 }, 0.15) end
+        end)
+        Window:_Connect(UserInputService.InputChanged, function(input)
+            if resizing and (input == rInput or input.UserInputType == Enum.UserInputType.MouseMovement) then
+                local d = (input.Position - startPos) / math.max(Utility.Scale, 0.01)
+                Window:Resize(startSize.X.Offset + d.X, startSize.Y.Offset + d.Y, true)
+            end
+        end)
+    end
+
+    -- Dragging (topbar only) ----------------------------------------
+    table.insert(Window._Connections, EnableDragging(TopBarF1, Main))
+
+    -- Open / Close ---------------------------------------------------
+    function Window:Open()
+        if Window.IslandOpen then return end
+        Window.IslandOpen = true
+        UI.IslandOpen = true
+        Window.Default = "Default"
+        Main.Visible = true
+        Main.Size = UDim2.new(0, Window.Size.X.Offset, 0, 0)
+        Utility:TweenObject(Main, { Size = Window.Size }, 0.3, Enum.EasingStyle.Back, DirOut)
+        local t = Window.TransparencyNum
+        Utility:TweenObject(Main, { BackgroundTransparency = t }, 0.25)
+        ResizeHandle.Visible = Window.Resizable
+        ShowIsland(false)
+        task.delay(0.3, function() MinzUI.Visible = false end)
+    end
+    function Window:Close()
+        if not Window.IslandOpen then return end
+        Window.IslandOpen = false
+        UI.IslandOpen = false
+        Window.Default = "Minimize"
+        MinzUI.Visible = true
+        ResizeHandle.Visible = false
+        Utility:TweenObject(Main, { Size = UDim2.new(0, Window.Size.X.Offset, 0, 0), BackgroundTransparency = 1 }, 0.25, QuadIn, DirIn)
+        task.delay(0.26, function() if not Window.IslandOpen then Main.Visible = false end end)
+        ShowIsland(true)
+    end
+    function Window:Toggle()
+        if Window.IslandOpen then Window:Close() else Window:Open() end
+    end
+
+    MinBtn.Activated:Connect(function() Window:Close() end)
+    MinzUI.Activated:Connect(function() Window:Open() end)
+
+    function Window:OnDestroy(cb) Window._OnDestroy = cb or function() end end
+    function Window:Destroy()
+        Safe(Window._OnDestroy)
+        for _, c in ipairs(Window._Connections) do pcall(function() c:Disconnect() end) end
+        Window._Connections = {}
+        Window.IslandOpen = false
+        ResizeHandle.Visible = false
+        Utility:TweenObject(Main, { Size = UDim2.new(0, Window.Size.X.Offset, 0, 0), BackgroundTransparency = 1 }, 0.25, QuadIn, DirIn)
+        for i, w in ipairs(UI.Windows) do if w == Window then table.remove(UI.Windows, i) break end end
+        task.delay(0.27, function()
+            if #UI.Windows == 0 then
+                UIScreen:Destroy()
+            else
+                Main:Destroy()
+                MinzUI:Destroy()
+            end
+        end)
+    end
+    CloseBtn.Activated:Connect(function() Window:Destroy() end)
+
+    -- Toggle key ----------------------------------------------------
+    Window:_Connect(UserInputService.InputBegan, function(input, gp)
+        if gp then return end
+        if input.KeyCode == Window.ToggleKey then Window:Toggle() end
+    end)
+    function Window:SetToggleKey(v)
+        if type(v) == "string" then v = Enum.KeyCode[v] end
+        Window.ToggleKey = v or Window.ToggleKey
+        return Window
+    end
+
+    -- Misc API --------------------------------------------------------
+    function Window:SetTitle(v) LibName.Text = v MinzLabel.Text = v end
+    function Window:SetAuthor(v)
+        Window.Author = v
+        LibAuthor.Text = v or ""
+        LibAuthor.Visible = v ~= nil and v ~= ""
+        LibName.TextYAlignment = LibAuthor.Visible and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center
+        LibName.UIPadding.PaddingTop = UDim.new(0, LibAuthor.Visible and 5 or 0)
+    end
+    function Window:ToCenter()
+        Utility:TweenObject(Main, { Position = UDim2.new(0.5, 0, 0.5, 0) }, 0.2)
+    end
+    function Window:SetTransparency(Value)
+        if typeof(Value) == "boolean" then
+            Window.TransparencyNum = Value and 0.3 or 0
+        elseif typeof(Value) == "number" then
+            Window.TransparencyNum = math.clamp(Value, 0, 1)
+        else
+            return Window
+        end
+        ApplySurfaces()
+        return Window
+    end
+    function Window:GetTransparency() return Window.TransparencyNum end
+    function Window:GetTheme() return Window.Theme end
+    function Window:Notify(c) return UI:Notification(c) end
+
+    ApplySurfaces()
+    ShowIsland(false)
+    Island.Visible = false
+
+    return Window
+end
+
+return UI
