@@ -18,57 +18,101 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 
-local LocalPlayer = Players.L
+local LocalPlayer = Players.LocalPlayer
+
+local function CreateSection(ctx, Section)
+    Section = Section or {}
+    Section.Title = Section.Title or ""
+    Section.TextSize = Section.TextSize or 14
+    Section.Open = (Section.Default ~= false)
+
     local Root = VexUI:Create("Frame", {
-        Parent = ctx.Parent, BackgroundTransparency = 1, AutomaticSize = AutoY, Size = UDim2.new(1, 0, 0, 28),
+        Parent = ctx.Parent,
+        BackgroundTransparency = 1,
+        AutomaticSize = AutoY,
+        Size = UDim2.new(1, 0, 0, 28),
     }, { Utility:ListLayout("V", 4) })
 
-    local Header = VexUI:Create("TextButton", { Parent = Root, Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 1 })
+    local Header = VexUI:Create("TextButton", {
+        Parent = Root,
+        Size = UDim2.new(1, 0, 0, 28),
+        LayoutOrder = 1,
+    })
+
+    local LabelPadding = VexUI:Create("UIPadding", {
+        PaddingLeft = UDim.new(0, 4),
+    })
+
     local Label = VexUI:Create("TextLabel", {
-        Parent = Header, Size = UDim2.new(1, 0, 1, 0), Text = Section.Title, RichText = true, TextSize = Section.TextSize,
-        TextXAlignment = Left, ThemeID = { TextColor3 = "Section.Text|Text" },
-    }, { VexUI:Create("UIPadding", { PaddingLeft = UDim.new(0, 4) }) })
+        Parent = Header,
+        Size = UDim2.new(1, 0, 1, 0),
+        Text = Section.Title,
+        RichText = true,
+        TextSize = Section.TextSize,
+        TextXAlignment = Left,
+        ThemeID = { TextColor3 = "Section.Text|Text" },
+    }, { LabelPadding })
 
     if Section.Icon then
-        Label.UIPadding.PaddingLeft = Section.UIPadding + UDim.new(0, 28)
+        local basePad = typeof(Section.UIPadding) == "UDim" and Section.UIPadding or UDim.new(0, tonumber(Section.UIPadding) or 0)
+        LabelPadding.PaddingLeft = basePad + UDim.new(0, 28)
         local Icon = VexUI:Create("ImageLabel", {
-            Parent = Header, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 4, 0.5, 0),
-            Size = UDim2.new(0, 20, 0, 20), ThemeID = { ImageColor3 = "Section.Icon|IconColor" },
+            Parent = Header,
+            AnchorPoint = Vector2.new(0, 0.5),
+            Position = UDim2.new(0, 4, 0.5, 0),
+            Size = UDim2.new(0, 20, 0, 20),
+            ThemeID = { ImageColor3 = "Section.Icon|IconColor" },
         })
         SetIcon(Icon, Section.Icon)
     end
 
     local Arrow = VexUI:Create("ImageLabel", {
-        Parent = Header, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0),
-        Size = UDim2.new(0, 16, 0, 16), Visible = false, Rotation = 180,
+        Parent = Header,
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -6, 0.5, 0),
+        Size = UDim2.new(0, 16, 0, 16),
+        Visible = false,
+        Rotation = 180,
         ThemeID = { ImageColor3 = "Section.Icon|IconColor" },
     })
     SetIcon(Arrow, "chevron-down")
 
     local Container = VexUI:Create("Frame", {
-        Parent = Root, LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AutoY, ClipsDescendants = true,
-        BackgroundTransparency = Section.Border and 0.7 or 1, ThemeID = { BackgroundColor3 = "ElementColor" },
+        Parent = Root,
+        LayoutOrder = 2,
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = AutoY,
+        ClipsDescendants = true,
+        BackgroundTransparency = Section.Border and 0.7 or 1,
+        ThemeID = { BackgroundColor3 = "ElementColor" },
     }, {
-        Corner(14), Utility:ListLayout("V", 5), Utility:Padding({ top = 4, bottom = 4, left = 3, right = 3 }),
+        Corner(14),
+        Utility:ListLayout("V", 5),
+        Utility:Padding({ top = 4, bottom = 4, left = 3, right = 3 }),
         GStroke({ Alt = true }),
     })
-    local CStroke = Container:FindFirstChildOfClass("UIStroke")
-    CStroke.Transparency = Section.Border and 0 or 1
-    local Layout = Container:FindFirstChildOfClass("UIListLayout")
 
+    local CStroke = Container:FindFirstChildOfClass("UIStroke")
+    if CStroke then
+        CStroke.Transparency = Section.Border and 0 or 1
+    end
+
+    local Layout = Container:FindFirstChildOfClass("UIListLayout")
     local token, elements = 0, 0
+
     local function setOpen(open, instant)
         Section.Open = open
         token += 1
         local my = token
         Utility:TweenObject(Arrow, { Rotation = open and 180 or 0 }, 0.25)
+
         if open then
             if instant then
                 Container.AutomaticSize = AutoY
                 Container.Size = UDim2.new(1, 0, 0, 0)
                 return
             end
-            local target = Unscale(Layout.AbsoluteContentSize.Y) + 8
+            local target = (Layout and Unscale(Layout.AbsoluteContentSize.Y) or 0) + 8
             Container.AutomaticSize = AutoNone
             Utility:TweenObject(Container, { Size = UDim2.new(1, 0, 0, target) }, 0.25)
             task.delay(0.28, function()
@@ -100,26 +144,38 @@ local LocalPlayer = Players.L
             elements += 1
             if elements == 1 then
                 Arrow.Visible = true
-                if not Section.Default then setOpen(false, true) end
+                if not Section.Default then
+                    setOpen(false, true)
+                end
             end
         end,
     }, { __index = ctx })
+
     AttachElementMethods(Section, sctx)
 
     local ElementToggle = Section.Toggle
     Section.Toggle = function(self, a)
-        if type(a) == "table" then return ElementToggle(self, a) end
-        if a == nil then a = not Section.Open end
+        if type(a) == "table" then
+            return ElementToggle and ElementToggle(self, a)
+        end
+        if a == nil then
+            a = not Section.Open
+        end
         if elements == 0 then return end
         setOpen(a and true or false)
     end
+
     function Section:Close() Root:Destroy() end
     function Section:SetTitle(v) Label.Text = v end
     function Section:SetTextSize(v) Label.TextSize = v end
 
-    if not Section.Default then setOpen(false, true) end
+    if not Section.Default then
+        setOpen(false, true)
+    end
+
     return Section
 end
+
 
 -- GROUP ---------------------------------------------------------------
 Builders.Group = function(ctx, Config)
