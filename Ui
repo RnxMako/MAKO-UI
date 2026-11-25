@@ -1348,14 +1348,14 @@ function UI:CreateWindow(Config)
     function Window:GetTheme() return Window.Theme end
     function Window:Notify(c) return UI:Notification(c) end
 
-    ApplySurfaces()
+        ApplySurfaces()
     ShowIsland(false)
     Island.Visible = false
 
     return Window
 end
 
-return UIocalPlayer
+local LocalPlayer = Players.LocalPlayer
 local IsTouch = UserInputService.TouchEnabled
 local IsMobile = IsTouch and not UserInputService.KeyboardEnabled
 
@@ -1366,6 +1366,7 @@ local QuadOut, QuadIn, QuadInOut = Enum.EasingStyle.Quad, Enum.EasingStyle.Quad,
 local DirOut, DirIn = Enum.EasingDirection.Out, Enum.EasingDirection.In
 
 local DefaultH = IsMobile and 44 or 40
+
 
 ----------------------------------------------------------------------
 -- Utility
